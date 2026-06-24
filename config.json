@@ -1,0 +1,24 @@
+{
+  "apiUrl": "https://script.google.com/macros/s/AKfycbzu8fz4wiflZiNoGRQR78XAUUKwagORkn6IoGQVsfhP3ZbbUROq2pzS5OZcZWn9OuTGYg/exec",
+  "appName": "Damage 2026 Form",
+  "maxImageWidth": 1280,
+  "imageQuality": 0.78,
+  "options": {
+    "bu": ["DM02", "DP02", "DG02", "1115", "DCWN", "DS02", "DO02"],
+    "damageTypes": ["สินค้าชำรุด", "สินค้าแตกแพค", "สินค้าหมดอายุ"],
+    "damageDescriptions": [
+      "สินค้าบุบเสียหาย",
+      "สินค้ามีรอยคัตเตอร์",
+      "สินค้าห่อแฟ่บ",
+      "สินค้าฉีกขาด",
+      "สินค้ามีสิ่งปนเปื้อน ส่งกลิ่น",
+      "สินค้าแตก หักเสียหาย",
+      "สินค้ารั่วซึม",
+      "อื่น"
+    ],
+    "damageGroups": ["OPT", "SUP", "Out bound"],
+    "accountGroups": ["สินค้ารอทำลายได้", "สินค้ารอทำลายไม่ได้"],
+    "shifts": ["A", "B"],
+    "affiliations": ["PTG", "Man Power", "40HRS", "BU"]
+  }
+}

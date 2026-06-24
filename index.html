@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Damage 2026 Form</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Damage 2026 • VS Code Version</p>
+        <h1>บันทึกสินค้าเสียหาย</h1>
+        <p class="lead">หน้าเว็บนี้ทำงานจาก VS Code / Netlify แล้วส่งข้อมูลเข้า Google Sheet หน้า Damage_2026 ผ่าน Apps Script API</p>
+      </div>
+      <div class="hero-card">
+        <span>วันนี้</span>
+        <b id="todayText">-</b>
+        <small id="apiStatus">กำลังตรวจสอบ API...</small>
+      </div>
+    </header>
+
+    <div id="apiWarning" class="alert hidden">
+      ยังไม่ได้ใส่ API URL ในไฟล์ <b>config.json</b> ให้เอา Web App URL ที่ลงท้ายด้วย <b>/exec</b> มาใส่ก่อนใช้งานจริง
+    </div>
+
+    <nav class="tabs" aria-label="เมนูหลัก">
+      <button class="tab active" data-page="formPage">📝 กรอกข้อมูล</button>
+      <button class="tab" data-page="latestPage">📋 ข้อมูลล่าสุด</button>
+      <button class="tab" data-page="dashboardPage">📊 Dashboard</button>
+    </nav>
+
+    <main>
+      <section id="formPage" class="page active">
+        <form id="damageForm" class="panel form-grid" autocomplete="off">
+          <div class="section-title full">
+            <div>
+              <h2>ข้อมูลสินค้า</h2>
+              <p>ค้นหาด้วยบาร์โค้ด / รหัสสินค้า / ชื่อสินค้า แล้วระบบจะเติมรหัสสินค้า ชื่อสินค้า และหน่วยให้</p>
+            </div>
+            <button type="button" class="btn secondary" id="btnSearchProduct">ค้นหาสินค้า</button>
+          </div>
+
+          <label>
+            BU <span class="req">*</span>
+            <select id="bu" required></select>
+          </label>
+
+          <label>
+            บาร์โค้ด <span class="req">*</span>
+            <input id="barcode" inputmode="numeric" required placeholder="ยิงบาร์โค้ดหรือพิมพ์เอง" />
+          </label>
+
+          <label>
+            รหัสสินค้า <span class="req">*</span>
+            <input id="itemCode" required placeholder="รหัสสินค้า" />
+          </label>
+
+          <label class="wide">
+            ชื่อสินค้า <span class="req">*</span>
+            <input id="itemName" required placeholder="ชื่อสินค้า" />
+          </label>
+
+          <label>
+            หน่วย <span class="req">*</span>
+            <input id="unit" required placeholder="EA / BT / BAG" />
+          </label>
+
+          <div id="productResults" class="result-list full hidden"></div>
+
+          <div class="section-title full">
+            <div>
+              <h2>รูปภาพประกอบ</h2>
+              <p>แนบได้ 3 รูป ระบบจะย่อภาพก่อนส่งเข้า Apps Script เพื่อลดปัญหาไฟล์ใหญ่</p>
+            </div>
+          </div>
+
+          <label class="upload-card">
+            รูปภาพ 1 / Barcode
+            <input id="imageBarcode" type="file" accept="image/*" capture="environment" />
+            <img id="previewBarcode" alt="Preview Barcode" />
+            <span>แตะเพื่อเลือกรูป</span>
+          </label>
+
+          <label class="upload-card">
+            รูปภาพสินค้า
+            <input id="imageProduct" type="file" accept="image/*" capture="environment" />
+            <img id="previewProduct" alt="Preview Product" />
+            <span>แตะเพื่อเลือกรูป</span>
+          </label>
+
+          <label class="upload-card">
+            รูปวันหมดอายุ
+            <input id="imageExpiry" type="file" accept="image/*" capture="environment" />
+            <img id="previewExpiry" alt="Preview Expiry" />
+            <span>แตะเพื่อเลือกรูป</span>
+          </label>
+
+          <div class="section-title full">
+            <div>
+              <h2>รายละเอียดความเสียหาย</h2>
+              <p>ข้อมูลส่วนนี้จะถูกบันทึกลงคอลัมน์ใน Sheet Damage_2026 ตามฐานข้อมูลเดิม</p>
+            </div>
+          </div>
+
+          <label>
+            ประเภทสินค้า <span class="req">*</span>
+            <select id="damageType" required></select>
+          </label>
+
+          <label>
+            ลักษณะสินค้า <span class="req">*</span>
+            <select id="damageDescription" required></select>
+          </label>
+
+          <label id="otherDamageWrap" class="hidden">
+            ระบุลักษณะสินค้าอื่น ๆ
+            <input id="damageDescriptionOther" placeholder="ระบุรายละเอียด" />
+          </label>
+
+          <label>
+            วันหมดอายุ
+            <input id="expiryDate" type="date" />
+          </label>
+
+          <label>
+            กลุ่มเสียหาย
+            <select id="damageGroup"></select>
+          </label>
+
+          <label>
+            กลุ่มสินค้าทางบัญชี
+            <select id="accountGroup"></select>
+          </label>
+
+          <label>
+            เลขกล่อง
+            <input id="boxNo" placeholder="ถ้ามี" />
+          </label>
+
+          <label>
+            จำนวน <span class="req">*</span>
+            <input id="quantity" type="number" min="0.001" step="0.001" required placeholder="0" />
+          </label>
+
+          <label>
+            เวลาที่ได้รับแจ้ง
+            <input id="reportTime" type="time" />
+          </label>
+
+          <label>
+            กะ
+            <select id="shift"></select>
+          </label>
+
+          <div class="cost-card full">
+            <span>มูลค่าต่อหน่วย</span>
+            <b id="unitCostText">-</b>
+            <span>มูลค่ารวม</span>
+            <b id="totalValueText">-</b>
+            <small id="costHint">ระบบจะดึงจากชีต ราคาทุน เมื่อมีรหัสสินค้าและจำนวน</small>
+          </div>
+
+          <div class="section-title full">
+            <div>
+              <h2>ข้อมูลผู้กระทำ / หมายเหตุ</h2>
+              <p>ค้นหาพนักงานได้จากชื่อ ชื่อเล่น หรือรหัสพนักงาน</p>
+            </div>
+            <button type="button" class="btn secondary" id="btnSearchEmployee">ค้นหาพนักงาน</button>
+          </div>
+
+          <label>
+            ผู้กระทำ
+            <input id="actor" placeholder="ชื่อผู้กระทำ / ไม่ทราบผู้กระทำ" />
+          </label>
+
+          <label>
+            รหัสพนักงาน
+            <input id="employeeId" placeholder="รหัสพนักงาน" />
+          </label>
+
+          <label>
+            สังกัด
+            <select id="affiliation"></select>
+          </label>
+
+          <label class="wide">
+            หมายเหตุ
+            <textarea id="note" rows="3" placeholder="รายละเอียดเพิ่มเติม"></textarea>
+          </label>
+
+          <div id="employeeResults" class="result-list full hidden"></div>
+
+          <div class="actions full">
+            <button type="button" class="btn" id="btnReset">ล้างข้อมูล</button>
+            <button type="submit" class="btn primary" id="btnSave">บันทึกข้อมูล</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="latestPage" class="page">
+        <div class="panel">
+          <div class="toolbar">
+            <div>
+              <h2>ข้อมูลล่าสุด</h2>
+              <p>แสดงรายการล่าสุดจาก Sheet Damage_2026</p>
+            </div>
+            <button class="btn secondary" id="btnRefreshLatest">Refresh</button>
+          </div>
+          <div id="latestList" class="cards-list"></div>
+        </div>
+      </section>
+
+      <section id="dashboardPage" class="page">
+        <div class="panel">
+          <div class="toolbar dashboard-toolbar">
+            <div>
+              <h2>Dashboard</h2>
+              <p>สรุปจำนวนเคส มูลค่าความเสียหาย และ Top รายการจากฐาน Damage_2026</p>
+            </div>
+            <label>
+              ช่วงวัน
+              <select id="dashPeriod">
+                <option value="7">7 วันล่าสุด</option>
+                <option value="30" selected>30 วันล่าสุด</option>
+                <option value="90">90 วันล่าสุด</option>
+                <option value="ALL">ทั้งหมด</option>
+              </select>
+            </label>
+            <label>
+              BU
+              <select id="dashBu"></select>
+            </label>
+            <label>
+              ประเภทสินค้า
+              <select id="dashDamageType"></select>
+            </label>
+            <button class="btn secondary" id="btnRefreshDashboard">Refresh</button>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi"><span>จำนวนเคส</span><b id="kpiCases">0</b></div>
+            <div class="kpi"><span>จำนวนชิ้นรวม</span><b id="kpiQty">0</b></div>
+            <div class="kpi"><span>มูลค่ารวม</span><b id="kpiValue">0</b></div>
+            <div class="kpi"><span>ไม่พบผู้กระทำ</span><b id="kpiNoActor">0</b></div>
+          </div>
+
+          <div class="dashboard-grid">
+            <div class="mini-panel">
+              <h3>Top BU ตามจำนวนเคส</h3>
+              <div id="topBu" class="bar-list"></div>
+            </div>
+            <div class="mini-panel">
+              <h3>Top ประเภทสินค้า</h3>
+              <div id="topType" class="bar-list"></div>
+            </div>
+            <div class="mini-panel wide-panel">
+              <h3>รายการล่าสุดในเงื่อนไขนี้</h3>
+              <div id="dashboardRows" class="cards-list compact"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="loading" class="loading hidden"><div class="spinner"></div><span>กำลังประมวลผล...</span></div>
+  <div id="toast" class="toast"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
