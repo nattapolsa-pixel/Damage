@@ -348,6 +348,11 @@ function bindLatest() {
       renderLatest(state.latest);
     }
   });
+  if ($('btnExportLatestExcel')) {
+    $('btnExportLatestExcel').addEventListener('click', () => {
+      exportToExcel(state.latestFiltered, 'Damage_Latest_Detailed_Data');
+    });
+  }
 }
 
 function bindDashboard() {
@@ -360,6 +365,16 @@ function bindDashboard() {
     clearTimeout(state.dashboardTimer);
     state.dashboardTimer = setTimeout(refreshDashboard, 420);
   });
+
+  if ($('btnExportDashboardImg')) $('btnExportDashboardImg').addEventListener('click', exportFullDashboardImage);
+  if ($('btnExportDashboardPdf')) $('btnExportDashboardPdf').addEventListener('click', exportDashboardToPDF);
+  if ($('btnExportDashboardExcel')) {
+    $('btnExportDashboardExcel').addEventListener('click', () => {
+      const bu = val('dashBu') || 'ทั้งหมด';
+      const period = val('dashPeriod') || '30';
+      exportToExcel(state.dashboardRecords, `Damage_Dashboard_Data_${bu}_${period}d`);
+    });
+  }
 }
 
 function bindRecordActions() {
@@ -2246,4 +2261,259 @@ function debounce(fn, wait) {
     clearTimeout(timer);
     timer = setTimeout(() => fn(...args), wait);
   };
+}
+
+/* ================================================
+   REPORT EXPORT UTILITIES (EXCEL, PDF, SCREENSHOTS)
+   ================================================ */
+
+function exportToExcel(records, baseFilename) {
+  if (!records || !records.length) {
+    toast('ไม่มีข้อมูลที่จะส่งออก', 'warn');
+    return;
+  }
+  
+  // Create mapping from headers to record values
+  const headers = [
+    'แถว', 'วันที่', 'BU', 'บาร์โค้ด', 'รหัสสินค้า', 'ชื่อสินค้า',
+    'รูป Barcode', 'รูปสินค้า', 'รูปวันหมดอายุ', 'ประเภทสินค้า',
+    'ลักษณะสินค้า', 'วันหมดอายุ', 'กลุ่ม เสียหาย', 'เลขกล่อง',
+    'จำนวน', 'หน่วย', 'เวลาที่ได้รับแจ้ง', 'กะ', 'ผู้กระทำ',
+    'รหัสพนักงาน', 'สังกัด', 'หมายเหตุ', 'กลุ่มสินค้าทางบัญชี',
+    'มูลค่าต่อหน่วย', 'มูลค่ารวม'
+  ];
+
+  const data = records.map(r => [
+    r.rowNumber ? Number(r.rowNumber) : '',
+    r.date || '',
+    r.bu || '',
+    r.barcode || '',
+    r.itemCode || '',
+    r.itemName || '',
+    r.image1 && r.image1.url ? r.image1.url : '',
+    r.image2 && r.image2.url ? r.image2.url : '',
+    r.image3 && r.image3.url ? r.image3.url : '',
+    r.damageType || '',
+    r.damageDescription || '',
+    r.expiryDate || '',
+    r.damageGroup || '',
+    r.boxNo || '',
+    num(r.quantity),
+    r.unit || '',
+    r.reportTime || '',
+    r.shift || '',
+    r.actor || '',
+    r.employeeId || '',
+    r.affiliation || '',
+    r.note || '',
+    r.accountGroup || '',
+    num(r.unitCost),
+    num(r.totalValue)
+  ]);
+
+  // Prepend headers to data
+  const sheetData = [headers, ...data];
+
+  // Create worksheet and workbook
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Damage_Data');
+
+  // Format columns auto-width
+  const wscols = headers.map(h => ({ wch: Math.max(h.length * 2, 10) }));
+  for (let col = 0; col < headers.length; col++) {
+    let maxLen = headers[col].length;
+    for (let row = 0; row < data.length; row++) {
+      const val = String(data[row][col] || '');
+      if (val.length > maxLen) maxLen = val.length;
+    }
+    wscols[col] = { wch: Math.min(Math.max(maxLen + 2, 8), 50) };
+  }
+  ws['!cols'] = wscols;
+
+  // Build filename with date/time
+  const dateStr = new Date().toLocaleDateString('th-TH').replace(/\//g, '-');
+  const filename = `${baseFilename}_${dateStr}.xlsx`;
+
+  // Save Excel file
+  XLSX.writeFile(wb, filename);
+  toast(`ส่งออก Excel สำเร็จ: ${filename}`, 'ok');
+}
+
+function exportSectionToImage(elementId, filenamePrefix) {
+  const el = $(elementId);
+  if (!el) {
+    toast('ไม่พบหัวข้อที่ต้องการจับภาพ', 'bad');
+    return;
+  }
+
+  loading(true);
+  
+  // Wait short delay for layout to settle
+  setTimeout(() => {
+    html2canvas(el, {
+      scale: 2, // High resolution
+      useCORS: true,
+      backgroundColor: '#f8fafc',
+      logging: false
+    }).then(canvas => {
+      const imgData = canvas.toDataURL('image/png');
+      const dateStr = new Date().toLocaleDateString('th-TH').replace(/\//g, '-');
+      const filename = `${filenamePrefix}_${dateStr}.png`;
+      
+      const link = document.createElement('a');
+      link.href = imgData;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      loading(false);
+      toast(`บันทึกรูปสำเร็จ: ${filename}`, 'ok');
+    }).catch(err => {
+      loading(false);
+      toast('จับภาพหน้าจอไม่สำเร็จ: ' + err.message, 'bad');
+    });
+  }, 100);
+}
+
+function exportFullDashboardImage() {
+  const page = document.querySelector('#dashboardPage .dashboard-page');
+  const toolbar = document.querySelector('#dashboardPage .dashboard-toolbar');
+  const exportRow = document.querySelector('#dashboardPage .dash-export-row');
+  
+  if (!page) {
+    toast('ไม่พบหน้า Dashboard', 'bad');
+    return;
+  }
+
+  // Hide controls before capture
+  if (toolbar) toolbar.style.display = 'none';
+  if (exportRow) exportRow.style.display = 'none';
+  
+  // Also temporarily hide individual capture buttons
+  const captureBtns = document.querySelectorAll('.btn-capture');
+  captureBtns.forEach(btn => btn.style.display = 'none');
+
+  loading(true);
+  
+  setTimeout(() => {
+    html2canvas(page, {
+      scale: 1.5,
+      useCORS: true,
+      backgroundColor: '#f8fafc',
+      logging: false
+    }).then(canvas => {
+      // Restore controls
+      if (toolbar) toolbar.style.display = '';
+      if (exportRow) exportRow.style.display = '';
+      captureBtns.forEach(btn => btn.style.display = '');
+
+      const imgData = canvas.toDataURL('image/png');
+      const dateStr = new Date().toLocaleDateString('th-TH').replace(/\//g, '-');
+      const filename = `Dashboard_Full_Report_${dateStr}.png`;
+      
+      const link = document.createElement('a');
+      link.href = imgData;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      loading(false);
+      toast(`บันทึกรูปภาพ Dashboard สำเร็จ`, 'ok');
+    }).catch(err => {
+      // Restore controls
+      if (toolbar) toolbar.style.display = '';
+      if (exportRow) exportRow.style.display = '';
+      captureBtns.forEach(btn => btn.style.display = '');
+      
+      loading(false);
+      toast('บันทึกรูปไม่สำเร็จ: ' + err.message, 'bad');
+    });
+  }, 150);
+}
+
+async function exportDashboardToPDF() {
+  const sections = [
+    { id: 'section-overview', name: 'สรุปภาพรวมและ KPI' },
+    { id: 'section-charts', name: 'แนวโน้มความเสียหายและสถิติหลัก' },
+    { id: 'section-bu', name: 'วิเคราะห์หน่วยธุรกิจ (BU)' },
+    { id: 'section-products', name: 'วิเคราะห์สินค้าและลักษณะเสียหาย' },
+    { id: 'section-shifts', name: 'วิเคราะห์กะและปฏิบัติงาน' },
+    { id: 'section-people', name: 'วิเคราะห์บุคคลและคุณภาพข้อมูล' }
+  ];
+
+  const activeSections = sections.filter(sec => $(sec.id));
+  if (!activeSections.length) {
+    toast('ไม่พบข้อมูลที่จะส่งออกเป็น PDF', 'bad');
+    return;
+  }
+
+  loading(true);
+  
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF('p', 'mm', 'a4');
+  const pageWidth = pdf.internal.pageSize.getWidth(); // 210
+  const pageHeight = pdf.internal.pageSize.getHeight(); // 297
+  const margin = 10;
+  const targetWidth = pageWidth - (margin * 2); // 190
+
+  // Hide capture buttons during PDF generation
+  const captureBtns = document.querySelectorAll('.btn-capture');
+  captureBtns.forEach(btn => btn.style.display = 'none');
+
+  try {
+    for (let i = 0; i < activeSections.length; i++) {
+      const section = activeSections[i];
+      const el = $(section.id);
+      
+      const canvas = await html2canvas(el, {
+        scale: 1.5,
+        useCORS: true,
+        backgroundColor: '#f8fafc',
+        logging: false
+      });
+      
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      
+      const imgWidthPx = canvas.width;
+      const imgHeightPx = canvas.height;
+      const ratio = imgHeightPx / imgWidthPx;
+      const displayHeight = targetWidth * ratio;
+
+      if (i > 0) {
+        pdf.addPage();
+      }
+      
+      // Page Header
+      pdf.setFontSize(10);
+      pdf.setTextColor(150, 150, 150);
+      pdf.text(`รายงานสรุปสินค้าเสียหาย (Damage 2026) - ${section.name}`, margin, margin - 2);
+      
+      // Handle scaling if height overflows page
+      let finalHeight = displayHeight;
+      if (displayHeight > (pageHeight - (margin * 2.5))) {
+        finalHeight = pageHeight - (margin * 2.5);
+      }
+      
+      pdf.addImage(imgData, 'JPEG', margin, margin, targetWidth, finalHeight);
+      
+      // Page Footer
+      pdf.setFontSize(8);
+      pdf.setTextColor(180, 180, 180);
+      pdf.text(`หน้า ${i + 1} จาก ${activeSections.length} · พิมพ์เมื่อ ${new Date().toLocaleDateString('th-TH')}`, margin, pageHeight - 5);
+    }
+
+    const dateStr = new Date().toLocaleDateString('th-TH').replace(/\//g, '-');
+    const filename = `Damage_Dashboard_Report_${dateStr}.pdf`;
+    pdf.save(filename);
+    
+    toast(`ดาวน์โหลด PDF รายงานสำเร็จ: ${filename}`, 'ok');
+  } catch (err) {
+    toast('สร้าง PDF ไม่สำเร็จ: ' + err.message, 'bad');
+  } finally {
+    captureBtns.forEach(btn => btn.style.display = '');
+    loading(false);
+  }
 }
