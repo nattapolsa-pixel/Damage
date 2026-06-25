@@ -1,8 +1,12 @@
 const DEFAULT_CONFIG = {
   apiUrl: '',
+  apiProxyUrl: '',
+  apiToken: '',
   appName: 'Damage 2026 Form',
   maxImageWidth: 1280,
   imageQuality: 0.78,
+  maxSourceImageBytes: 12000000,
+  maxImageBytes: 1600000,
   options: {
     bu: ['DM02', 'DP02', 'DG02', '1115', 'DCWN', 'DS02', 'DO02'],
     damageTypes: ['สินค้าชำรุด', 'สินค้าแตกแพค', 'สินค้าหมดอายุ'],
@@ -33,7 +37,10 @@ const state = {
     imageProduct: '',
     imageExpiry: ''
   },
+  editingRowNumber: null,
+  editingRecord: null,
   productSearchTimer: null,
+  dashboardTimer: null,
   costTimer: null,
   toastTimer: null
 };
@@ -48,13 +55,14 @@ async function initApp() {
   bindImages();
   bindDashboard();
   bindLatest();
+  bindRecordActions();
 
   await loadConfig();
   applyApiStatus();
   fillOptions(state.options);
   setTodayTime();
 
-  if (hasApiUrl()) {
+  if (hasApiConfigured()) {
     await loadAppData();
     await refreshLatest();
     await refreshDashboard();
@@ -94,17 +102,25 @@ function hasApiUrl() {
   return !!url && url.includes('/exec') && !url.includes('PASTE_');
 }
 
+function hasProxyUrl() {
+  return !!String(state.config.apiProxyUrl || '').trim();
+}
+
+function hasApiConfigured() {
+  return hasApiUrl() || hasProxyUrl();
+}
+
 function applyApiStatus() {
   const warning = $('apiWarning');
   const apiStatus = $('apiStatus');
-  if (!hasApiUrl()) {
+  if (!hasApiConfigured()) {
     warning.classList.remove('hidden');
-    apiStatus.textContent = 'ยังไม่ได้ตั้งค่า API URL';
+    apiStatus.textContent = 'ยังไม่ได้ตั้งค่า API URL หรือ Proxy';
     apiStatus.style.color = '#92400e';
     return;
   }
   warning.classList.add('hidden');
-  apiStatus.textContent = 'พร้อมเชื่อมต่อ Apps Script API';
+  apiStatus.textContent = hasProxyUrl() ? 'พร้อมเชื่อมต่อผ่าน Proxy / Apps Script API' : 'พร้อมเชื่อมต่อ Apps Script API';
   apiStatus.style.color = '#166534';
 }
 
@@ -144,6 +160,8 @@ function fillOptions(options) {
 
   fillSelect('dashBu', ['ทั้งหมด', ...(options.bu || [])], null);
   fillSelect('dashDamageType', ['ทั้งหมด', ...(options.damageTypes || [])], null);
+  fillSelect('dashShift', ['ทั้งหมด', ...(options.shifts || [])], null);
+  fillSelect('dashDamageGroup', ['ทั้งหมด', ...(options.damageGroups || [])], null);
 }
 
 function fillSelect(id, items, blankLabel) {
@@ -173,13 +191,14 @@ function bindTabs() {
 function showPage(pageId) {
   document.querySelectorAll('.tab').forEach((btn) => btn.classList.toggle('active', btn.dataset.page === pageId));
   document.querySelectorAll('.page').forEach((page) => page.classList.toggle('active', page.id === pageId));
-  if (pageId === 'latestPage' && hasApiUrl()) refreshLatest();
-  if (pageId === 'dashboardPage' && hasApiUrl()) refreshDashboard();
+  if (pageId === 'latestPage' && hasApiConfigured()) refreshLatest();
+  if (pageId === 'dashboardPage' && hasApiConfigured()) refreshDashboard();
 }
 
 function bindForm() {
   $('damageForm').addEventListener('submit', submitDamage);
   $('btnReset').addEventListener('click', () => resetForm());
+  $('btnCancelEdit').addEventListener('click', () => resetForm());
   $('btnSearchProduct').addEventListener('click', () => searchProduct(true));
   $('btnSearchEmployee').addEventListener('click', () => searchEmployee(true));
   $('damageDescription').addEventListener('change', toggleOtherDamage);
@@ -220,7 +239,10 @@ function bindImages() {
       }
       try {
         loading(true);
-        const dataUrl = await compressImage(file, state.config.maxImageWidth, state.config.imageQuality);
+        if (file.size > Number(state.config.maxSourceImageBytes || 0)) {
+          throw new Error('ไฟล์ต้นฉบับใหญ่เกิน ' + formatBytes(state.config.maxSourceImageBytes));
+        }
+        const dataUrl = await compressImageForUpload(file);
         state.images[inputId] = { dataUrl, name: file.name };
         preview.src = dataUrl;
         preview.parentElement.classList.add('has-image');
@@ -239,15 +261,31 @@ function bindLatest() {
 
 function bindDashboard() {
   $('btnRefreshDashboard').addEventListener('click', refreshDashboard);
-  ['dashPeriod', 'dashBu', 'dashDamageType'].forEach((id) => {
+  ['dashPeriod', 'dashBu', 'dashDamageType', 'dashShift', 'dashDamageGroup', 'dashStartDate', 'dashEndDate'].forEach((id) => {
     $(id).addEventListener('change', refreshDashboard);
+  });
+  $('dashQuery').addEventListener('input', () => {
+    clearTimeout(state.dashboardTimer);
+    state.dashboardTimer = setTimeout(refreshDashboard, 420);
+  });
+}
+
+function bindRecordActions() {
+  ['latestList', 'dashboardRows'].forEach((id) => {
+    $(id).addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-record-action]');
+      if (!btn) return;
+      const rowNumber = Number(btn.dataset.rowNumber || 0);
+      if (btn.dataset.recordAction === 'edit') editRecord(rowNumber);
+      if (btn.dataset.recordAction === 'delete') deleteRecord(rowNumber);
+    });
   });
 }
 
 async function submitDamage(event) {
   event.preventDefault();
-  if (!hasApiUrl()) {
-    toast('กรุณาใส่ API URL ใน config.json ก่อน', 'warn');
+  if (!hasApiConfigured()) {
+    toast('กรุณาใส่ API URL หรือ Proxy URL ใน config.json ก่อน', 'warn');
     return;
   }
 
@@ -261,9 +299,13 @@ async function submitDamage(event) {
   $('btnSave').disabled = true;
   loading(true);
   try {
-    const res = await apiPost('saveDamage', payload);
-    const data = unwrapApi(res);
-    toast(data.message || 'บันทึกสำเร็จ', 'ok');
+    const action = state.editingRowNumber ? 'updateDamage' : 'saveDamage';
+    if (state.editingRowNumber) {
+      payload.rowNumber = state.editingRowNumber;
+      payload.keepExistingImages = true;
+    }
+    const data = await submitDamagePayload(action, payload);
+    toast(data.message || (state.editingRowNumber ? 'แก้ไขสำเร็จ' : 'บันทึกสำเร็จ'), 'ok');
     if (Array.isArray(data.latest)) {
       state.latest = data.latest;
       renderLatest(state.latest);
@@ -277,6 +319,24 @@ async function submitDamage(event) {
   } finally {
     $('btnSave').disabled = false;
     loading(false);
+  }
+}
+
+async function submitDamagePayload(action, payload) {
+  try {
+    const res = await apiPost(action, payload);
+    return unwrapApi(res);
+  } catch (err) {
+    const message = err.message || String(err);
+    if (!state.editingRowNumber && message.startsWith('DUPLICATE:')) {
+      const confirmMessage = message.replace(/^DUPLICATE:\s*/, '') + '\n\nต้องการบันทึกซ้ำหรือไม่?';
+      if (window.confirm(confirmMessage)) {
+        const retryPayload = { ...payload, allowDuplicate: true };
+        const res = await apiPost(action, retryPayload);
+        return unwrapApi(res);
+      }
+    }
+    throw err;
   }
 }
 
@@ -331,7 +391,7 @@ function toggleOtherDamage() {
 }
 
 async function searchProduct(force) {
-  if (!hasApiUrl()) return;
+  if (!hasApiConfigured()) return;
   const query = val('barcode') || val('itemCode') || val('itemName');
   if (!force && normalize(query).length < 4) return;
   if (!query) {
@@ -382,7 +442,7 @@ function applyProduct(p) {
 }
 
 async function searchEmployee(force) {
-  if (!hasApiUrl()) return;
+  if (!hasApiConfigured()) return;
   const query = val('actor') || val('employeeId');
   if (!force && normalize(query).length < 2) return;
   try {
@@ -432,7 +492,7 @@ function scheduleCostPreview() {
 async function updateCostPreview() {
   const itemCode = val('itemCode');
   const quantity = val('quantity');
-  if (!hasApiUrl() || !itemCode) {
+  if (!hasApiConfigured() || !itemCode) {
     setCostPreview(0, 0, false);
     return;
   }
@@ -452,7 +512,7 @@ function setCostPreview(unitCost, totalValue, found) {
 }
 
 async function refreshLatest() {
-  if (!hasApiUrl()) return;
+  if (!hasApiConfigured()) return;
   loading(true);
   try {
     const res = await apiGet('getLatestRecords', { limit: 20 });
@@ -476,13 +536,18 @@ function renderLatest(records) {
 }
 
 async function refreshDashboard() {
-  if (!hasApiUrl()) return;
+  if (!hasApiConfigured()) return;
   loading(true);
   try {
     const payload = {
       period: val('dashPeriod') || '30',
       bu: val('dashBu') || 'ทั้งหมด',
-      damageType: val('dashDamageType') || 'ทั้งหมด'
+      damageType: val('dashDamageType') || 'ทั้งหมด',
+      shift: val('dashShift') || 'ทั้งหมด',
+      damageGroup: val('dashDamageGroup') || 'ทั้งหมด',
+      startDate: val('dashStartDate'),
+      endDate: val('dashEndDate'),
+      query: val('dashQuery')
     };
     const res = await apiGet('getDashboardRecords', payload);
     const data = unwrapApi(res);
@@ -535,7 +600,22 @@ function renderBars(id, items) {
 }
 
 function recordCard(r) {
-  const imageCount = [r.image1, r.image2, r.image3].filter((img) => img && img.hasImage).length;
+  const images = [r.image1, r.image2, r.image3].filter((img) => img && img.hasImage);
+  const imageCount = images.length;
+  const imageLinks = images.length ? `
+      <div class="record-images">
+        ${images.map((img, i) => `
+          <a href="${escAttr(img.url || img.previewUrl)}" target="_blank" rel="noopener">รูป ${i + 1}</a>
+        `).join('')}
+      </div>
+    ` : '';
+  const rowNumber = Number(r.rowNumber || 0);
+  const actions = rowNumber ? `
+      <div class="record-actions">
+        <button type="button" class="icon-btn" data-record-action="edit" data-row-number="${rowNumber}" title="แก้ไข">แก้ไข</button>
+        <button type="button" class="icon-btn danger" data-record-action="delete" data-row-number="${rowNumber}" title="ลบ">ลบ</button>
+      </div>
+    ` : '';
   return `
     <article class="record-card">
       <div class="record-head">
@@ -543,7 +623,10 @@ function recordCard(r) {
           <b>${esc(r.itemName || '-')}</b>
           <p>${esc(r.barcode || '-')} • ${esc(r.itemCode || '-')}</p>
         </div>
-        <span class="pill blue">Row ${esc(r.rowNumber || '-')}</span>
+        <div class="record-head-side">
+          <span class="pill blue">Row ${esc(r.rowNumber || '-')}</span>
+          ${actions}
+        </div>
       </div>
       <div class="record-meta">
         <span class="pill">${esc(r.date || '-')}</span>
@@ -553,26 +636,166 @@ function recordCard(r) {
         <span class="pill ok">${esc(r.totalValue ? money(r.totalValue) : 'ไม่พบราคา')}</span>
         <span class="pill">รูป ${imageCount}</span>
       </div>
+      ${imageLinks}
       <p>ลักษณะ: ${esc(r.damageDescription || '-')} • ผู้กระทำ: ${esc(r.actor || '-')} • หมายเหตุ: ${esc(r.note || '-')}</p>
     </article>
   `;
 }
 
+function findRecordByRow(rowNumber) {
+  const row = Number(rowNumber || 0);
+  return [...state.latest, ...state.dashboardRecords].find((record) => Number(record.rowNumber || 0) === row);
+}
+
+function editRecord(rowNumber) {
+  const record = findRecordByRow(rowNumber);
+  if (!record) {
+    toast('ไม่พบข้อมูลรายการนี้ในหน้าปัจจุบัน กรุณา Refresh แล้วลองอีกครั้ง', 'warn');
+    return;
+  }
+
+  resetForm(true);
+  state.editingRowNumber = Number(rowNumber);
+  state.editingRecord = record;
+
+  ensureSelectValue('bu', record.bu || '');
+  setValue('barcode', record.barcode);
+  setValue('itemCode', record.itemCode);
+  setValue('itemName', record.itemName);
+  setValue('unit', record.unit);
+
+  ensureSelectValue('damageType', record.damageType || '');
+  const damageParts = splitDamageDescription(record.damageDescription);
+  ensureSelectValue('damageDescription', damageParts.main || '');
+  setValue('damageDescriptionOther', damageParts.other);
+  toggleOtherDamage();
+
+  setValue('expiryDate', dateInputFromDisplay(record.expiryDate));
+  ensureSelectValue('damageGroup', record.damageGroup || '');
+  ensureSelectValue('accountGroup', record.accountGroup || '');
+  setValue('boxNo', record.boxNo);
+  setValue('quantity', record.quantity);
+  setValue('reportTime', record.reportTime);
+  ensureSelectValue('shift', record.shift || '');
+  setValue('actor', record.actor);
+  setValue('employeeId', record.employeeId);
+  ensureSelectValue('affiliation', record.affiliation || '');
+  setValue('note', record.note);
+
+  setExistingImagePreview('previewBarcode', record.image1);
+  setExistingImagePreview('previewProduct', record.image2);
+  setExistingImagePreview('previewExpiry', record.image3);
+
+  $('editNoticeText').textContent = 'กำลังแก้ไข Row ' + rowNumber;
+  $('editNotice').classList.remove('hidden');
+  $('btnSave').textContent = 'บันทึกการแก้ไข';
+  showPage('formPage');
+  updateCostPreview();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function deleteRecord(rowNumber) {
+  const row = Number(rowNumber || 0);
+  if (!row) return;
+  if (!window.confirm('ต้องการลบ Row ' + row + ' หรือไม่?')) return;
+
+  loading(true);
+  try {
+    const res = await apiPost('deleteDamage', { rowNumber: row });
+    const data = unwrapApi(res);
+    toast(data.message || 'ลบข้อมูลแล้ว', 'ok');
+    if (state.editingRowNumber === row) resetForm(true);
+    await refreshLatest();
+    await refreshDashboard();
+  } catch (err) {
+    toast('ลบข้อมูลไม่สำเร็จ: ' + (err.message || err), 'bad');
+  } finally {
+    loading(false);
+  }
+}
+
+function splitDamageDescription(value) {
+  const text = String(value || '').trim();
+  const m = text.match(/^อื่น\s*[:：]\s*(.*)$/);
+  if (m) return { main: 'อื่น', other: m[1] || '' };
+  return { main: text, other: '' };
+}
+
+function setExistingImagePreview(previewId, image) {
+  const preview = $(previewId);
+  const url = image && (image.previewUrl || image.url);
+  if (!url) {
+    preview.removeAttribute('src');
+    preview.parentElement.classList.remove('has-image');
+    return;
+  }
+  preview.src = url;
+  preview.parentElement.classList.add('has-image');
+}
+
 async function apiGet(action, params = {}) {
+  if (hasProxyUrl()) {
+    try {
+      return await apiProxyRequest(action, params);
+    } catch (err) {
+      if (!hasApiUrl()) throw err;
+    }
+  }
   return jsonpRequest(action, params);
 }
 
 async function apiPost(action, payload = {}) {
+  if (hasProxyUrl()) {
+    try {
+      return await apiProxyRequest(action, payload);
+    } catch (err) {
+      if (!hasApiUrl()) throw err;
+    }
+  }
+  return directApiPost(action, payload);
+}
+
+async function apiProxyRequest(action, payload = {}) {
+  const url = String(state.config.apiProxyUrl || '').trim();
+  if (!url) throw new Error('ยังไม่ได้ตั้งค่า Proxy API');
+
+  const body = { action, payload };
+  if (state.config.apiToken) body.apiToken = state.config.apiToken;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(text.slice(0, 180) || 'Proxy API Error');
+  }
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error('Proxy API ตอบกลับไม่ใช่ JSON: ' + text.slice(0, 120));
+  }
+}
+
+async function directApiPost(action, payload = {}) {
   const url = state.config.apiUrl;
   if (!hasApiUrl()) throw new Error('ยังไม่ได้ตั้งค่า API URL');
+
+  const body = { action, payload };
+  if (state.config.apiToken) body.apiToken = state.config.apiToken;
 
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action, payload })
+    body: JSON.stringify(body)
   });
 
   const text = await res.text();
+  if (!res.ok) {
+    throw new Error(text.slice(0, 180) || 'API Error');
+  }
   try {
     return JSON.parse(text);
   } catch (err) {
@@ -608,6 +831,7 @@ function jsonpRequest(action, params = {}) {
     Object.entries(params || {}).forEach(([key, value]) => {
       if (value !== undefined && value !== null) url.searchParams.set(key, value);
     });
+    if (state.config.apiToken) url.searchParams.set('apiToken', state.config.apiToken);
 
     script.onerror = () => {
       cleanup();
@@ -620,6 +844,8 @@ function jsonpRequest(action, params = {}) {
 
 function resetForm(keepToast) {
   $('damageForm').reset();
+  state.editingRowNumber = null;
+  state.editingRecord = null;
   state.images = { imageBarcode: '', imageProduct: '', imageExpiry: '' };
   ['previewBarcode', 'previewProduct', 'previewExpiry'].forEach((id) => {
     const img = $(id);
@@ -628,6 +854,8 @@ function resetForm(keepToast) {
   });
   $('productResults').classList.add('hidden');
   $('employeeResults').classList.add('hidden');
+  $('editNotice').classList.add('hidden');
+  $('btnSave').textContent = 'บันทึกข้อมูล';
   toggleOtherDamage();
   setCostPreview(0, 0, false);
   setTodayTime();
@@ -699,6 +927,33 @@ function compressImage(file, maxWidth = 1280, quality = 0.78) {
   });
 }
 
+async function compressImageForUpload(file) {
+  const maxBytes = Number(state.config.maxImageBytes || DEFAULT_CONFIG.maxImageBytes);
+  let width = Number(state.config.maxImageWidth || DEFAULT_CONFIG.maxImageWidth);
+  let quality = Number(state.config.imageQuality || DEFAULT_CONFIG.imageQuality);
+  let lastDataUrl = '';
+
+  for (let i = 0; i < 6; i++) {
+    lastDataUrl = await compressImage(file, width, quality);
+    if (dataUrlSizeBytes(lastDataUrl) <= maxBytes) return lastDataUrl;
+    width = Math.max(560, Math.round(width * 0.82));
+    quality = Math.max(0.52, quality - 0.08);
+  }
+
+  throw new Error('รูปหลังย่อยังใหญ่เกิน ' + formatBytes(maxBytes));
+}
+
+function dataUrlSizeBytes(dataUrl) {
+  const base64 = String(dataUrl || '').split('base64,')[1] || '';
+  return Math.ceil((base64.length * 3) / 4);
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return '0 MB';
+  return (bytes / (1024 * 1024)).toLocaleString('th-TH', { maximumFractionDigits: 1 }) + ' MB';
+}
+
 function localDateInputValue(date) {
   const d = new Date(date);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -706,6 +961,20 @@ function localDateInputValue(date) {
 
 function localTimeInputValue(date) {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function dateInputFromDisplay(value) {
+  if (!value) return '';
+  const text = String(value).trim();
+  let m = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+  m = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (m) {
+    let year = Number(m[3]);
+    if (year > 2400) year -= 543;
+    return `${year}-${String(m[2]).padStart(2, '0')}-${String(m[1]).padStart(2, '0')}`;
+  }
+  return '';
 }
 
 function displayDate(value) {

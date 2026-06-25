@@ -22,7 +22,7 @@
     </header>
 
     <div id="apiWarning" class="alert hidden">
-      ยังไม่ได้ใส่ API URL ในไฟล์ <b>config.json</b> ให้เอา Web App URL ที่ลงท้ายด้วย <b>/exec</b> มาใส่ก่อนใช้งานจริง
+      ยังไม่ได้ใส่ API URL หรือ Proxy URL ในไฟล์ <b>config.json</b> ให้ใส่ Web App URL ที่ลงท้ายด้วย <b>/exec</b> หรือใช้ <b>apiProxyUrl</b> ก่อนใช้งานจริง
     </div>
 
     <nav class="tabs" aria-label="เมนูหลัก">
@@ -33,6 +33,11 @@
 
     <main>
       <section id="formPage" class="page active">
+        <div id="editNotice" class="alert info hidden">
+          <span id="editNoticeText">กำลังแก้ไขรายการ</span>
+          <button type="button" class="link-btn" id="btnCancelEdit">ยกเลิกแก้ไข</button>
+        </div>
+
         <form id="damageForm" class="panel form-grid" autocomplete="off">
           <div class="section-title full">
             <div>
@@ -235,6 +240,26 @@
             <label>
               ประเภทสินค้า
               <select id="dashDamageType"></select>
+            </label>
+            <label>
+              กะ
+              <select id="dashShift"></select>
+            </label>
+            <label>
+              กลุ่มเสียหาย
+              <select id="dashDamageGroup"></select>
+            </label>
+            <label>
+              จากวันที่
+              <input id="dashStartDate" type="date" />
+            </label>
+            <label>
+              ถึงวันที่
+              <input id="dashEndDate" type="date" />
+            </label>
+            <label class="dashboard-search">
+              ค้นหา
+              <input id="dashQuery" placeholder="Barcode / สินค้า / ผู้กระทำ" />
             </label>
             <button class="btn secondary" id="btnRefreshDashboard">Refresh</button>
           </div>

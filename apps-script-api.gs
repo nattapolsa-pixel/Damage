@@ -14,6 +14,8 @@ const API_CONFIG = {
   COST_SHEET_NAME: 'ราคาทุน',
   IMAGE_FOLDER_NAME: 'Damage_2026_Form_Images',
   IMAGE_CELL_MODE: 'LINK',
+  MAX_IMAGE_BYTES: 1600000,
+  DUPLICATE_SCAN_ROWS: 150,
   TZ: 'Asia/Bangkok',
   BU: ['DM02', 'DP02', 'DG02', '1115', 'DCWN', 'DS02', 'DO02'],
   DAMAGE_TYPES: ['สินค้าชำรุด', 'สินค้าแตกแพค', 'สินค้าหมดอายุ'],
@@ -92,9 +94,18 @@ function handleApiRequest_(e, method) {
     } catch (err) {
       payload = {};
     }
+  } else if (method === 'GET') {
+    payload = {};
+    Object.keys(params).forEach((key) => {
+      if (['action', 'callback', 'apiToken', 'token'].indexOf(key) === -1) {
+        payload[key] = params[key];
+      }
+    });
   }
 
   try {
+    assertAuthorized_(requestBody, payload, params);
+    scrubAuthFields_(payload);
     const result = routeApiAction_(action, payload, params);
     return apiResponse_({ ok: true, action, data: result }, callback);
   } catch (err) {
@@ -117,6 +128,10 @@ function routeApiAction_(action, payload, params) {
       return getAppDataApi_();
     case 'saveDamage':
       return saveDamageApi_(payload);
+    case 'updateDamage':
+      return updateDamageApi_(payload);
+    case 'deleteDamage':
+      return deleteDamageApi_(payload);
     case 'getLatestRecords':
       return getLatestRecordsApi_(payload.limit || params.limit || 20);
     case 'getDashboardRecords':
@@ -146,6 +161,40 @@ function apiResponse_(obj, callback) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+function assertAuthorized_(requestBody, payload, params) {
+  const expected = getApiToken_();
+  if (!expected) return;
+
+  const actual = String(
+    (requestBody && (requestBody.apiToken || requestBody.token)) ||
+    (payload && (payload.apiToken || payload.token)) ||
+    (params && (params.apiToken || params.token)) ||
+    ''
+  ).trim();
+
+  if (actual !== expected) {
+    throw new Error('Unauthorized: API token ไม่ถูกต้องหรือไม่ได้ส่งมา');
+  }
+}
+
+function getApiToken_() {
+  try {
+    return String(
+      PropertiesService.getScriptProperties().getProperty('DAMAGE_API_TOKEN') ||
+      PropertiesService.getScriptProperties().getProperty('API_TOKEN') ||
+      ''
+    ).trim();
+  } catch (err) {
+    return '';
+  }
+}
+
+function scrubAuthFields_(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  delete payload.apiToken;
+  delete payload.token;
+}
+
 function getAppDataApi_() {
   ensureDamageSheet_();
   return {
@@ -168,6 +217,117 @@ function saveDamageApi_(payload) {
   ensureDamageSheet_();
   payload = payload || {};
 
+  const qty = validateDamagePayload_(payload);
+
+  const ss = SpreadsheetApp.openById(API_CONFIG.SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(API_CONFIG.SHEET_NAME);
+
+  if (!payload.allowDuplicate) {
+    const duplicate = findDuplicateDamage_(sheet, payload, 0);
+    if (duplicate) throw new Error('DUPLICATE: พบรายการที่อาจซ้ำกับ Row ' + duplicate.rowNumber + ' วันนี้');
+  }
+
+  const unitCost = lookupUnitCost_(payload.itemCode);
+  const imageCells = [
+    imageCell_(saveImage_(payload.imageBarcode, 'รูปภาพ 1').url, 'เปิดรูป 1'),
+    imageCell_(saveImage_(payload.imageProduct, 'รูปภาพ2').url, 'เปิดรูป 2'),
+    imageCell_(saveImage_(payload.imageExpiry, 'รูปภาพ3').url, 'เปิดรูป 3')
+  ];
+  const values = buildDamageRowValues_(payload, new Date(), imageCells, unitCost, qty);
+
+  const lock = LockService.getDocumentLock();
+  lock.waitLock(30000);
+  try {
+    if (!payload.allowDuplicate) {
+      const duplicate = findDuplicateDamage_(sheet, payload, 0);
+      if (duplicate) throw new Error('DUPLICATE: พบรายการที่อาจซ้ำกับ Row ' + duplicate.rowNumber + ' วันนี้');
+    }
+
+    const nextRow = Math.max(sheet.getLastRow() + 1, 2);
+    setDamageRow_(sheet, nextRow, values);
+    SpreadsheetApp.flush();
+
+    return {
+      message: 'บันทึกสำเร็จที่แถว ' + nextRow,
+      rowNumber: nextRow,
+      record: readRecordAtRow_(sheet, nextRow),
+      latest: getLatestRecordsApi_(8).records
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function updateDamageApi_(payload) {
+  ensureDamageSheet_();
+  payload = payload || {};
+
+  const rowNumber = Number(payload.rowNumber || 0);
+  if (!rowNumber || rowNumber < 2) throw new Error('ไม่พบ rowNumber สำหรับแก้ไข');
+  const qty = validateDamagePayload_(payload);
+
+  const ss = SpreadsheetApp.openById(API_CONFIG.SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(API_CONFIG.SHEET_NAME);
+  const unitCost = lookupUnitCost_(payload.itemCode);
+  const newImageCells = [
+    payload.imageBarcode ? imageCell_(saveImage_(payload.imageBarcode, 'รูปภาพ 1').url, 'เปิดรูป 1') : null,
+    payload.imageProduct ? imageCell_(saveImage_(payload.imageProduct, 'รูปภาพ2').url, 'เปิดรูป 2') : null,
+    payload.imageExpiry ? imageCell_(saveImage_(payload.imageExpiry, 'รูปภาพ3').url, 'เปิดรูป 3') : null
+  ];
+
+  const lock = LockService.getDocumentLock();
+  lock.waitLock(30000);
+  try {
+    assertValidRow_(sheet, rowNumber);
+    const currentRange = sheet.getRange(rowNumber, 1, 1, API_HEADERS.length);
+    const currentValues = currentRange.getValues()[0];
+    const currentDisplay = currentRange.getDisplayValues()[0];
+    const currentFormulas = currentRange.getFormulas()[0];
+    const imageCells = [5, 6, 7].map((colIndex, i) => {
+      if (newImageCells[i] !== null) return newImageCells[i];
+      return currentFormulas[colIndex] || currentDisplay[colIndex] || '';
+    });
+    const values = buildDamageRowValues_(payload, currentValues[0] || new Date(), imageCells, unitCost, qty);
+
+    setDamageRow_(sheet, rowNumber, values);
+    SpreadsheetApp.flush();
+
+    return {
+      message: 'แก้ไขสำเร็จที่แถว ' + rowNumber,
+      rowNumber,
+      record: readRecordAtRow_(sheet, rowNumber),
+      latest: getLatestRecordsApi_(8).records
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function deleteDamageApi_(payload) {
+  ensureDamageSheet_();
+  payload = payload || {};
+  const rowNumber = Number(payload.rowNumber || 0);
+  if (!rowNumber || rowNumber < 2) throw new Error('ไม่พบ rowNumber สำหรับลบ');
+
+  const ss = SpreadsheetApp.openById(API_CONFIG.SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(API_CONFIG.SHEET_NAME);
+  const lock = LockService.getDocumentLock();
+  lock.waitLock(30000);
+  try {
+    assertValidRow_(sheet, rowNumber);
+    sheet.deleteRow(rowNumber);
+    SpreadsheetApp.flush();
+    return {
+      message: 'ลบ Row ' + rowNumber + ' แล้ว',
+      rowNumber,
+      latest: getLatestRecordsApi_(8).records
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function validateDamagePayload_(payload) {
   const required = [
     ['bu', 'BU'],
     ['barcode', 'บาร์โค้ด'],
@@ -193,29 +353,23 @@ function saveDamageApi_(payload) {
   if (!isFinite(qty) || qty <= 0) {
     throw new Error('จำนวนต้องเป็นตัวเลขมากกว่า 0');
   }
+  return qty;
+}
 
-  const ss = SpreadsheetApp.openById(API_CONFIG.SPREADSHEET_ID);
-  const sheet = ss.getSheetByName(API_CONFIG.SHEET_NAME);
-  const now = new Date();
-  const nextRow = Math.max(sheet.getLastRow() + 1, 2);
-
-  const unitCost = lookupUnitCost_(payload.itemCode);
+function buildDamageRowValues_(payload, dateValue, imageCells, unitCost, qty) {
   const totalValue = unitCost > 0 ? unitCost * qty : '';
   const damageDescription = buildDamageDescription_(payload);
+  const rowDate = dateValue || new Date();
 
-  const image1 = saveImage_(payload.imageBarcode, 'รูปภาพ 1');
-  const image2 = saveImage_(payload.imageProduct, 'รูปภาพ2');
-  const image3 = saveImage_(payload.imageExpiry, 'รูปภาพ3');
-
-  const values = [
-    now,
+  return [
+    rowDate,
     safeText_(payload.bu),
     safeText_(payload.barcode),
     safeText_(payload.itemCode),
     safeText_(payload.itemName),
-    imageCell_(image1.url, 'เปิดรูป 1'),
-    imageCell_(image2.url, 'เปิดรูป 2'),
-    imageCell_(image3.url, 'เปิดรูป 3'),
+    imageCells[0] || '',
+    imageCells[1] || '',
+    imageCells[2] || '',
     safeText_(payload.damageType),
     safeText_(damageDescription),
     parseDateForSheet_(payload.expiryDate),
@@ -223,7 +377,7 @@ function saveDamageApi_(payload) {
     safeText_(payload.boxNo),
     qty,
     safeText_(payload.unit),
-    safeText_(payload.reportTime || Utilities.formatDate(now, API_CONFIG.TZ, 'HH:mm')),
+    safeText_(payload.reportTime || Utilities.formatDate(new Date(), API_CONFIG.TZ, 'HH:mm')),
     safeText_(payload.shift),
     safeText_(payload.actor),
     safeText_(payload.employeeId),
@@ -234,23 +388,56 @@ function saveDamageApi_(payload) {
     totalValue || '',
     deriveActorType_(payload.actor)
   ];
+}
 
-  const range = sheet.getRange(nextRow, 1, 1, API_HEADERS.length);
+function setDamageRow_(sheet, rowNumber, values) {
+  const range = sheet.getRange(rowNumber, 1, 1, API_HEADERS.length);
   range.setNumberFormats([[
     'dd/MM/yyyy', '@', '@', '@', '@', '@', '@', '@', '@', '@', 'dd/MM/yyyy',
     '@', '@', '0.###', '@', '@', '@', '@', '@', '@', '@', '@', '#,##0.00', '#,##0.00', '@'
   ]]);
   range.setValues([values]);
   range.setWrap(true).setVerticalAlignment('middle');
+}
 
-  SpreadsheetApp.flush();
+function readRecordAtRow_(sheet, rowNumber) {
+  const range = sheet.getRange(rowNumber, 1, 1, API_HEADERS.length);
+  return rowToRecord_(range.getDisplayValues()[0], rowNumber, range.getFormulas()[0]);
+}
 
-  return {
-    message: 'บันทึกสำเร็จที่แถว ' + nextRow,
-    rowNumber: nextRow,
-    record: rowToRecord_(sheet.getRange(nextRow, 1, 1, API_HEADERS.length).getDisplayValues()[0], nextRow, sheet.getRange(nextRow, 1, 1, API_HEADERS.length).getFormulas()[0]),
-    latest: getLatestRecordsApi_(8).records
-  };
+function assertValidRow_(sheet, rowNumber) {
+  if (rowNumber < 2 || rowNumber > sheet.getLastRow()) {
+    throw new Error('ไม่พบ Row ' + rowNumber);
+  }
+}
+
+function findDuplicateDamage_(sheet, payload, excludeRowNumber) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return null;
+
+  const barcode = normalizeKey_(payload.barcode);
+  const itemCode = normalizeKey_(payload.itemCode);
+  const bu = normalizeSimple_(payload.bu);
+  const qty = parseNumber_(payload.quantity);
+  const todayMs = startOfDay_(new Date()).getTime();
+  const scanRows = Math.min(API_CONFIG.DUPLICATE_SCAN_ROWS, lastRow - 1);
+  const startRow = Math.max(2, lastRow - scanRows + 1);
+  const values = sheet.getRange(startRow, 1, lastRow - startRow + 1, API_HEADERS.length).getDisplayValues();
+
+  for (let i = values.length - 1; i >= 0; i--) {
+    const rowNumber = startRow + i;
+    if (rowNumber === Number(excludeRowNumber || 0)) continue;
+    const r = rowToRecord_(values[i], rowNumber, []);
+    const rowDate = parseDateForFilter_(r.date);
+    if (!rowDate || startOfDay_(rowDate).getTime() !== todayMs) continue;
+    if (bu && normalizeSimple_(r.bu) !== bu) continue;
+    if (barcode && normalizeKey_(r.barcode) !== barcode) continue;
+    if (itemCode && normalizeKey_(r.itemCode) !== itemCode) continue;
+    if (qty > 0 && parseNumber_(r.quantity) !== qty) continue;
+    return r;
+  }
+
+  return null;
 }
 
 function getLatestRecordsApi_(limit) {
@@ -565,7 +752,13 @@ function saveImage_(image, label) {
 
   const parts = dataUrl.split('base64,');
   const mime = (parts[0].match(/data:([^;]+);/) || [])[1] || 'image/jpeg';
+  if (!/^image\//i.test(mime)) {
+    throw new Error(label + ' ต้องเป็นไฟล์รูปภาพเท่านั้น');
+  }
   const bytes = Utilities.base64Decode(parts[1]);
+  if (bytes.length > API_CONFIG.MAX_IMAGE_BYTES) {
+    throw new Error(label + ' ใหญ่เกิน ' + Math.round(API_CONFIG.MAX_IMAGE_BYTES / 1024 / 1024 * 10) / 10 + ' MB');
+  }
   const safeName = String(fileName || label + '_' + Date.now() + '.jpg').replace(/[\\/:*?"<>|]/g, '_');
   const blob = Utilities.newBlob(bytes, mime, safeName);
   const folder = getOrCreateFolder_(API_CONFIG.IMAGE_FOLDER_NAME);

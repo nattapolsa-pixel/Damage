@@ -1,8 +1,12 @@
 {
   "apiUrl": "https://script.google.com/macros/s/AKfycbzu8fz4wiflZiNoGRQR78XAUUKwagORkn6IoGQVsfhP3ZbbUROq2pzS5OZcZWn9OuTGYg/exec",
+  "apiProxyUrl": "/.netlify/functions/damage-api",
+  "apiToken": "",
   "appName": "Damage 2026 Form",
   "maxImageWidth": 1280,
   "imageQuality": 0.78,
+  "maxSourceImageBytes": 12000000,
+  "maxImageBytes": 1600000,
   "options": {
     "bu": ["DM02", "DP02", "DG02", "1115", "DCWN", "DS02", "DO02"],
     "damageTypes": ["สินค้าชำรุด", "สินค้าแตกแพค", "สินค้าหมดอายุ"],
