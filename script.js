@@ -196,7 +196,15 @@ function fillSelect(id, items, blankLabel) {
 
 function setTodayTime(today, timeNow) {
   const d = today || localDateInputValue(new Date());
-  const t = timeNow || localTimeInputValue(new Date());
+  let t = timeNow || localTimeInputValue(new Date());
+  if (t) {
+    const match = t.match(/^(\d{1,2}):(\d{2})/);
+    if (match) {
+      t = `${match[1]}:${match[2]} น.`;
+    } else if (!t.endsWith(' น.')) {
+      t = t + ' น.';
+    }
+  }
   $('todayText').textContent = displayDate(d);
   $('reportTime').value = t;
   if ($('dateView')) $('dateView').value = displayDate(d);
@@ -239,6 +247,24 @@ function bindForm() {
 
   ['actor', 'employeeId'].forEach((id) => {
     $(id).addEventListener('input', debounce(() => searchEmployee(false), 520));
+  });
+
+  $('reportTime').addEventListener('blur', (e) => {
+    let val = e.target.value.trim();
+    if (!val) return;
+    let m = val.match(/^(\d{1,2})(\d{2})$/);
+    if (m) {
+      val = `${m[1]}:${m[2]}`;
+    }
+    m = val.match(/^(\d{1,2}):(\d{2})$/);
+    if (m) {
+      val = `${m[1]}:${m[2]} น.`;
+    }
+    if (val && !val.endsWith(' น.')) {
+      val = val + ' น.';
+    }
+    e.target.value = val;
+    updateSummary();
   });
 }
 
