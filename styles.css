@@ -333,7 +333,6 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);box-shadow:0 0
 .dash-bq-row{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:14px;margin-bottom:16px}
 
 /* Budget card */
-.dash-budget-card{}
 .budget-input-group{display:flex;gap:8px;margin-bottom:12px}
 .budget-input{flex:1;height:38px;padding:0 10px;border:1px solid var(--line);border-radius:12px;font-size:13px;font-weight:800;color:#101828;background:#fff;outline:none;transition:border-color .15s ease}
 .budget-input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
@@ -399,7 +398,6 @@ input:focus,select:focus,textarea:focus{border-color:var(--brand);box-shadow:0 0
 
 /* Treemap */
 .treemap-split{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding-top:4px}
-.treemap-section{}
 .treemap-sub-title{font-size:11px;font-weight:900;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-bottom:10px}
 .treemap-wrap{display:flex;width:100%}
 .treemap-container {
