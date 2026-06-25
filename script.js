@@ -31,6 +31,11 @@ const state = {
   config: DEFAULT_CONFIG,
   options: DEFAULT_CONFIG.options,
   latest: [],
+  latestFiltered: [],
+  latestPage: 1,
+  latestLoadedAll: false,
+  imageDataCache: {},
+  imageLoadRun: 0,
   dashboardRecords: [],
   images: {
     imageBarcode: '',
@@ -56,6 +61,7 @@ async function initApp() {
   bindDashboard();
   bindLatest();
   bindRecordActions();
+  bindFormEnhancements();
 
   await loadConfig();
   applyApiStatus();
@@ -180,6 +186,9 @@ function setTodayTime(today, timeNow) {
   const t = timeNow || localTimeInputValue(new Date());
   $('todayText').textContent = displayDate(d);
   $('reportTime').value = t;
+  if ($('dateView')) $('dateView').value = displayDate(d);
+  if ($('timeText')) $('timeText').textContent = t;
+  updateSummary();
 }
 
 function bindTabs() {
@@ -220,6 +229,49 @@ function bindForm() {
   });
 }
 
+function bindFormEnhancements() {
+  const barcodeFile = $('barcodeScanFile');
+  const scanButtons = [$('btnScanBarcode'), $('mobileScanButton')].filter(Boolean);
+  scanButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (barcodeFile) barcodeFile.click();
+    });
+  });
+  if (barcodeFile) {
+    barcodeFile.addEventListener('change', () => {
+      const file = barcodeFile.files && barcodeFile.files[0];
+      if (file) toast('เลือกรูปบาร์โค้ดแล้ว หากอ่านไม่ได้ให้กรอกเลขบาร์โค้ดเอง', 'warn');
+      barcodeFile.value = '';
+    });
+  }
+
+  const mobileSave = $('mobileSaveButton');
+  if (mobileSave) {
+    mobileSave.addEventListener('click', () => {
+      $('damageForm').requestSubmit();
+    });
+  }
+
+  document.querySelectorAll('[data-set-field]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.setField;
+      const value = btn.dataset.setValue || '';
+      const el = $(id);
+      if (!el) return;
+      if (el.tagName === 'SELECT') ensureSelectValue(id, value);
+      else setValue(id, value);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      updateSummary();
+    });
+  });
+
+  document.querySelectorAll('#damageForm input, #damageForm select, #damageForm textarea').forEach((el) => {
+    el.addEventListener('input', updateSummary);
+    el.addEventListener('change', updateSummary);
+  });
+}
+
 function bindImages() {
   const map = [
     ['imageBarcode', 'previewBarcode'],
@@ -256,7 +308,35 @@ function bindImages() {
 }
 
 function bindLatest() {
-  $('btnRefreshLatest').addEventListener('click', refreshLatest);
+  $('btnRefreshLatest').addEventListener('click', () => refreshLatest());
+  $('btnBackToForm').addEventListener('click', () => showPage('formPage'));
+  $('btnLoadAllLatest').addEventListener('click', () => refreshLatest('ALL'));
+  $('btnLatestSearch').addEventListener('click', () => {
+    $('latestSearch').value = '';
+    state.latestPage = 1;
+    renderLatest(state.latest);
+  });
+  $('latestSearch').addEventListener('input', debounce(() => {
+    state.latestPage = 1;
+    renderLatest(state.latest);
+  }, 250));
+  $('latestPageSize').addEventListener('change', () => {
+    state.latestPage = 1;
+    renderLatest(state.latest);
+  });
+  $('btnLatestPrev').addEventListener('click', () => {
+    if (state.latestPage > 1) {
+      state.latestPage -= 1;
+      renderLatest(state.latest);
+    }
+  });
+  $('btnLatestNext').addEventListener('click', () => {
+    const totalPages = latestTotalPages();
+    if (state.latestPage < totalPages) {
+      state.latestPage += 1;
+      renderLatest(state.latest);
+    }
+  });
 }
 
 function bindDashboard() {
@@ -271,7 +351,7 @@ function bindDashboard() {
 }
 
 function bindRecordActions() {
-  ['latestList', 'dashboardRows'].forEach((id) => {
+  ['latestList', 'latestRows', 'latestCards', 'dashboardRows'].forEach((id) => {
     $(id).addEventListener('click', (event) => {
       const btn = event.target.closest('[data-record-action]');
       if (!btn) return;
@@ -509,16 +589,42 @@ function setCostPreview(unitCost, totalValue, found) {
   $('unitCostText').textContent = found ? money(unitCost) : '-';
   $('totalValueText').textContent = found ? money(totalValue) : '-';
   $('costHint').textContent = found ? 'พบราคาทุนจากชีต ราคาทุน' : 'ยังไม่พบราคาทุน หรือยังไม่ได้กรอกรหัสสินค้า';
+  updateSummary();
 }
 
-async function refreshLatest() {
+function updateSummary() {
+  setText('sumBu', val('bu') || '-');
+  setText('sumBarcode', val('barcode') || '-');
+  setText('sumItem', val('itemName') || val('itemCode') || '-');
+  setText('sumDamage', val('damageType') || '-');
+  setText('sumDamageDescription', val('damageDescription') === 'อื่น'
+    ? ('อื่น: ' + (val('damageDescriptionOther') || '-'))
+    : (val('damageDescription') || '-'));
+  setText('sumAccountGroup', val('accountGroup') || '-');
+  setText('sumUnitCost', $('unitCostText') ? $('unitCostText').textContent : '-');
+  setText('sumTotalValue', $('totalValueText') ? $('totalValueText').textContent : '-');
+  setText('sumQty', val('quantity') ? `${val('quantity')} ${val('unit') || ''}`.trim() : '-');
+  setText('sumShift', val('shift') || '-');
+  setText('sumActor', val('actor') || '-');
+}
+
+function setText(id, value) {
+  const el = $(id);
+  if (el) el.textContent = value;
+}
+
+async function refreshLatest(limit) {
   if (!hasApiConfigured()) return;
   loading(true);
   try {
-    const res = await apiGet('getLatestRecords', { limit: 20 });
+    const requestedLimit = limit || (state.latestLoadedAll ? 'ALL' : 200);
+    const res = await apiGet('getLatestRecords', { limit: requestedLimit });
     const data = unwrapApi(res);
     state.latest = data.records || [];
+    state.latestLoadedAll = String(requestedLimit).toUpperCase() === 'ALL';
+    state.latestPage = 1;
     renderLatest(state.latest);
+    if (state.latestLoadedAll) toast('โหลดข้อมูลทั้งหมดแบบเร็วแล้ว', 'ok');
   } catch (err) {
     toast('โหลดข้อมูลล่าสุดไม่สำเร็จ: ' + err.message, 'bad');
   } finally {
@@ -528,11 +634,197 @@ async function refreshLatest() {
 
 function renderLatest(records) {
   const box = $('latestList');
-  if (!records.length) {
-    box.innerHTML = '<div class="empty">ยังไม่มีข้อมูล หรือยังไม่ได้เชื่อมต่อ API</div>';
+  const rowsBox = $('latestRows');
+  const cardsBox = $('latestCards');
+  const filtered = filterLatestRecords(records || []);
+  state.latestFiltered = filtered;
+  const pageSize = latestPageSize();
+  const totalPages = latestTotalPages();
+  if (state.latestPage > totalPages) state.latestPage = totalPages;
+  const start = pageSize === Infinity ? 0 : (state.latestPage - 1) * pageSize;
+  const pageRows = pageSize === Infinity ? filtered : filtered.slice(start, start + pageSize);
+
+  if (!filtered.length) {
+    const empty = '<tr><td colspan="16"><div class="empty">ยังไม่มีข้อมูล หรือไม่พบข้อมูลตามคำค้นหา</div></td></tr>';
+    rowsBox.innerHTML = empty;
+    cardsBox.innerHTML = '<div class="empty">ยังไม่มีข้อมูล หรือไม่พบข้อมูลตามคำค้นหา</div>';
+    box.innerHTML = '';
+    updateLatestInfo(0, 0, 0);
+    updateLatestPager(0, 0, 0);
     return;
   }
-  box.innerHTML = records.map(recordCard).join('');
+
+  rowsBox.innerHTML = pageRows.map(latestTableRow).join('');
+  cardsBox.innerHTML = pageRows.map(recordCard).join('');
+  box.innerHTML = '';
+  updateLatestInfo(filtered.length, pageRows.length, start);
+  updateLatestPager(filtered.length, pageRows.length, start);
+  hydrateImageThumbs();
+}
+
+function filterLatestRecords(records) {
+  const query = normalize(val('latestSearch'));
+  if (!query) return records;
+  return records.filter((r) => {
+    const haystack = normalize([
+      r.rowNumber, r.date, r.bu, r.barcode, r.itemCode, r.itemName, r.damageType,
+      r.damageDescription, r.expiryDate, r.damageGroup, r.quantity, r.unit,
+      r.actor, r.employeeId, r.affiliation, r.note, r.accountGroup
+    ].join(' '));
+    return haystack.includes(query);
+  });
+}
+
+function latestPageSize() {
+  const value = val('latestPageSize') || '20';
+  if (value === 'ALL') return Infinity;
+  return Math.max(1, Number(value || 20));
+}
+
+function latestTotalPages() {
+  const size = latestPageSize();
+  const total = state.latestFiltered.length || filterLatestRecords(state.latest || []).length;
+  if (!total || size === Infinity) return 1;
+  return Math.max(1, Math.ceil(total / size));
+}
+
+function updateLatestInfo(total, shown, start) {
+  const totalLoaded = state.latest.length || 0;
+  const end = shown ? start + shown : 0;
+  const from = shown ? start + 1 : 0;
+  const suffix = state.latestLoadedAll ? 'โหลดทั้งหมดแล้ว' : 'โหลดล่าสุด 200 แถว';
+  $('latestInfo').textContent = `ทั้งหมด ${number(total)} แถว · แสดง ${from}-${end} จาก ${number(total)} แถว · ${suffix} (${number(totalLoaded)} แถวในหน่วยความจำ)`;
+}
+
+function updateLatestPager(total, shown, start) {
+  const size = latestPageSize();
+  const totalPages = latestTotalPages();
+  const current = size === Infinity ? 1 : state.latestPage;
+  $('latestPagerText').textContent = total ? `หน้า ${current} / ${totalPages}` : 'ไม่มีข้อมูล';
+  $('btnLatestPrev').disabled = current <= 1 || size === Infinity;
+  $('btnLatestNext').disabled = current >= totalPages || size === Infinity;
+}
+
+function latestTableRow(r) {
+  const rowNumber = Number(r.rowNumber || 0);
+  return `
+    <tr>
+      <td><b>${esc(r.rowNumber || '-')}</b></td>
+      <td class="nowrap">${esc(r.date || '-')}</td>
+      <td>${esc(r.bu || '-')}</td>
+      <td class="nowrap">${esc(r.barcode || '-')}</td>
+      <td class="nowrap">${esc(r.itemCode || '-')}</td>
+      <td class="product-cell"><b>${esc(r.itemName || '-')}</b></td>
+      <td>${imageThumb(r.image1, 'รูป Barcode')}</td>
+      <td>${imageThumb(r.image2, 'รูปสินค้า')}</td>
+      <td>${imageThumb(r.image3, 'รูปวันหมดอายุ')}</td>
+      <td>${esc(r.damageType || '-')}</td>
+      <td class="note-cell">${esc(r.damageDescription || '-')}</td>
+      <td class="nowrap">${esc(r.expiryDate || '-')}</td>
+      <td>${esc(r.damageGroup || '-')}</td>
+      <td class="nowrap">${esc(r.quantity || '0')} ${esc(r.unit || '')}</td>
+      <td class="note-cell">${esc(r.actor || '-')}</td>
+      <td>
+        ${rowNumber ? `
+          <div class="row-actions">
+            <button type="button" class="icon-btn" data-record-action="edit" data-row-number="${rowNumber}">แก้ไข</button>
+            <button type="button" class="icon-btn danger" data-record-action="delete" data-row-number="${rowNumber}">ลบ</button>
+          </div>
+        ` : '-'}
+      </td>
+    </tr>
+  `;
+}
+
+function imageThumb(image, label) {
+  if (!image || !image.hasImage) return '<span class="text-thumb">-</span>';
+  const fileId = image.fileId || '';
+  const directUrl = image.previewUrl || image.url || '';
+  const original = image.url || image.previewUrl || '';
+  if (!fileId && !directUrl) return '<span class="text-thumb">-</span>';
+  return `
+    <a class="image-thumb image-thumb-loading" href="${escAttr(original || directUrl)}" target="_blank" rel="noopener" title="${escAttr(label)}">
+      <img
+        data-file-id="${escAttr(fileId)}"
+        data-direct-src="${escAttr(fileId ? '' : directUrl)}"
+        data-image-label="${escAttr(label)}"
+        alt="${escAttr(label)}"
+        loading="lazy"
+      />
+      <span>โหลดรูป</span>
+    </a>
+  `;
+}
+
+function hydrateImageThumbs() {
+  const images = [...document.querySelectorAll('#latestRows img[data-file-id], #latestRows img[data-direct-src]')];
+  if (!images.length) return;
+
+  const runId = Date.now();
+  state.imageLoadRun = runId;
+  let index = 0;
+  const workers = Array.from({ length: Math.min(4, images.length) }, async () => {
+    while (index < images.length && state.imageLoadRun === runId) {
+      const img = images[index++];
+      await hydrateOneImageThumb(img);
+    }
+  });
+  Promise.all(workers).catch(() => {});
+}
+
+async function hydrateOneImageThumb(img) {
+  const fileId = img.dataset.fileId || '';
+  const directSrc = img.dataset.directSrc || '';
+  const box = img.closest('.image-thumb');
+  const label = img.dataset.imageLabel || 'รูปภาพ';
+
+  try {
+    if (fileId) {
+      if (!state.imageDataCache[fileId]) {
+        const res = await apiGet('getImageData', { fileId });
+        const data = unwrapApi(res);
+        state.imageDataCache[fileId] = data.dataUrl;
+      }
+      setThumbImage(img, state.imageDataCache[fileId]);
+      return;
+    }
+
+    if (directSrc) {
+      await loadDirectThumb(img, directSrc);
+      return;
+    }
+
+    throw new Error('ไม่มี URL รูปภาพ');
+  } catch (err) {
+    if (box) {
+      box.classList.remove('image-thumb-loading', 'loaded');
+      box.classList.add('failed');
+      const text = box.querySelector('span');
+      if (text) text.textContent = 'เปิดรูป';
+    }
+    img.removeAttribute('src');
+    img.alt = label;
+  }
+}
+
+function setThumbImage(img, src) {
+  img.src = src;
+  const box = img.closest('.image-thumb');
+  if (box) {
+    box.classList.remove('image-thumb-loading', 'failed');
+    box.classList.add('loaded');
+  }
+}
+
+function loadDirectThumb(img, src) {
+  return new Promise((resolve, reject) => {
+    img.onload = () => {
+      setThumbImage(img, src);
+      resolve();
+    };
+    img.onerror = () => reject(new Error('โหลดรูปไม่สำเร็จ'));
+    img.src = src;
+  });
 }
 
 async function refreshDashboard() {
@@ -569,10 +861,21 @@ function renderDashboard(records) {
   $('kpiQty').textContent = number(totalQty);
   $('kpiValue').textContent = money(totalValue);
   $('kpiNoActor').textContent = number(noActor);
+  if ($('dashRecordLabel')) $('dashRecordLabel').textContent = number(records.length) + ' รายการ';
+  if ($('dashPeriodLabel')) $('dashPeriodLabel').textContent = dashboardPeriodLabel();
 
   renderBars('topBu', groupCount(records, 'bu').slice(0, 8));
   renderBars('topType', groupCount(records, 'damageType').slice(0, 8));
   $('dashboardRows').innerHTML = records.length ? records.slice(0, 12).map(recordCard).join('') : '<div class="empty">ไม่มีข้อมูลตามเงื่อนไข</div>';
+}
+
+function dashboardPeriodLabel() {
+  const start = val('dashStartDate');
+  const end = val('dashEndDate');
+  if (start || end) return `${start || 'เริ่มต้น'} ถึง ${end || 'วันนี้'}`;
+  const period = val('dashPeriod') || '30';
+  if (period === 'ALL') return 'ทั้งหมด';
+  return period + ' วันล่าสุด';
 }
 
 function groupCount(records, key) {
@@ -855,10 +1158,11 @@ function resetForm(keepToast) {
   $('productResults').classList.add('hidden');
   $('employeeResults').classList.add('hidden');
   $('editNotice').classList.add('hidden');
-  $('btnSave').textContent = 'บันทึกข้อมูล';
+  $('btnSave').textContent = 'บันทึกลง Sheet';
   toggleOtherDamage();
   setCostPreview(0, 0, false);
   setTodayTime();
+  updateSummary();
   if (!keepToast) toast('ล้างข้อมูลแล้ว', 'ok');
 }
 
@@ -869,7 +1173,10 @@ function val(id) {
 
 function setValue(id, value) {
   const el = $(id);
-  if (el) el.value = value || '';
+  if (el) {
+    el.value = value || '';
+    updateSummary();
+  }
 }
 
 function ensureSelectValue(id, value) {

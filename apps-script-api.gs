@@ -15,6 +15,7 @@ const API_CONFIG = {
   IMAGE_FOLDER_NAME: 'Damage_2026_Form_Images',
   IMAGE_CELL_MODE: 'LINK',
   MAX_IMAGE_BYTES: 1600000,
+  MAX_INLINE_IMAGE_BYTES: 6000000,
   DUPLICATE_SCAN_ROWS: 150,
   TZ: 'Asia/Bangkok',
   BU: ['DM02', 'DP02', 'DG02', '1115', 'DCWN', 'DS02', 'DO02'],
@@ -142,6 +143,8 @@ function routeApiAction_(action, payload, params) {
       return findEmployeesApi_(payload.query || params.query || '');
     case 'getCostPreview':
       return getCostPreviewApi_(payload.itemCode || params.itemCode || '', payload.quantity || params.quantity || 0);
+    case 'getImageData':
+      return getImageDataApi_(payload.fileId || params.fileId || '');
     case 'refreshCostValues':
       return refreshCostValuesApi_();
     default:
@@ -733,6 +736,45 @@ function extractDriveFileId_(url) {
   const byId = text.match(/[?&]id=([a-zA-Z0-9_-]+)/);
   if (byId) return byId[1];
   return '';
+}
+
+function getImageDataApi_(fileId) {
+  const id = safeText_(fileId);
+  if (!/^[a-zA-Z0-9_-]{10,}$/.test(id)) {
+    throw new Error('fileId รูปภาพไม่ถูกต้อง');
+  }
+
+  const file = DriveApp.getFileById(id);
+  let blob = null;
+  try {
+    blob = file.getThumbnail();
+  } catch (err) {
+    blob = null;
+  }
+  if (!blob) blob = file.getBlob();
+
+  let mime = blob.getContentType() || file.getMimeType() || 'image/jpeg';
+  if (!/^image\//i.test(mime)) {
+    blob = file.getBlob();
+    mime = blob.getContentType() || file.getMimeType() || '';
+  }
+  if (!/^image\//i.test(mime)) {
+    throw new Error('ไฟล์นี้ไม่ใช่รูปภาพ');
+  }
+
+  const bytes = blob.getBytes();
+  if (bytes.length > API_CONFIG.MAX_INLINE_IMAGE_BYTES) {
+    throw new Error('รูปใหญ่เกินสำหรับแสดงตัวอย่าง กรุณากดเปิดรูปต้นฉบับ');
+  }
+
+  return {
+    fileId: id,
+    name: file.getName(),
+    mime,
+    size: bytes.length,
+    dataUrl: 'data:' + mime + ';base64,' + Utilities.base64Encode(bytes),
+    url: file.getUrl()
+  };
 }
 
 function saveImage_(image, label) {
