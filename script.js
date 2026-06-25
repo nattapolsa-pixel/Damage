@@ -47,7 +47,10 @@ const state = {
   productSearchTimer: null,
   dashboardTimer: null,
   costTimer: null,
-  toastTimer: null
+  toastTimer: null,
+  chartMonthly: null,
+  chartType: null,
+  loadingCount: 0
 };
 
 const $ = (id) => document.getElementById(id);
@@ -62,6 +65,7 @@ async function initApp() {
   bindLatest();
   bindRecordActions();
   bindFormEnhancements();
+  setupBudget();
 
   await loadConfig();
   applyApiStatus();
@@ -69,9 +73,16 @@ async function initApp() {
   setTodayTime();
 
   if (hasApiConfigured()) {
-    await loadAppData();
-    await refreshLatest();
-    await refreshDashboard();
+    loading(true);
+    try {
+      await Promise.all([
+        loadAppData(),
+        refreshLatest(),
+        refreshDashboard()
+      ]);
+    } finally {
+      loading(false);
+    }
   } else {
     renderLatest([]);
     renderDashboard([]);
@@ -341,8 +352,9 @@ function bindLatest() {
 
 function bindDashboard() {
   $('btnRefreshDashboard').addEventListener('click', refreshDashboard);
+  const debouncedRefresh = debounce(refreshDashboard, 250);
   ['dashPeriod', 'dashBu', 'dashDamageType', 'dashShift', 'dashDamageGroup', 'dashStartDate', 'dashEndDate'].forEach((id) => {
-    $(id).addEventListener('change', refreshDashboard);
+    $(id).addEventListener('change', debouncedRefresh);
   });
   $('dashQuery').addEventListener('input', () => {
     clearTimeout(state.dashboardTimer);
@@ -389,11 +401,15 @@ async function submitDamage(event) {
     if (Array.isArray(data.latest)) {
       state.latest = data.latest;
       renderLatest(state.latest);
+      resetForm(true);
+      await refreshDashboard();
     } else {
-      await refreshLatest();
+      resetForm(true);
+      await Promise.all([
+        refreshLatest(),
+        refreshDashboard()
+      ]);
     }
-    resetForm(true);
-    await refreshDashboard();
   } catch (err) {
     toast('บันทึกไม่สำเร็จ: ' + (err.message || err), 'bad');
   } finally {
@@ -866,7 +882,21 @@ function renderDashboard(records) {
 
   renderBars('topBu', groupCount(records, 'bu').slice(0, 8));
   renderBars('topType', groupCount(records, 'damageType').slice(0, 8));
-  $('dashboardRows').innerHTML = records.length ? records.slice(0, 12).map(recordCard).join('') : '<div class="empty">ไม่มีข้อมูลตามเงื่อนไข</div>';
+  $('dashboardRows').innerHTML = records.length ? records.slice(0, 12).map(recordCard).join('') : '<div class="empty" style="margin:20px 0">ไม่มีข้อมูลตามเงื่อนไข</div>';
+
+  renderCharts(records);
+  renderDetailStats(records);
+  renderDataQuality(records);
+  renderExtendedKPIs(records);
+  renderTreemaps(records);
+  renderTop5Products(records);
+  renderAllValueBreakdowns(records);
+  updateBudgetGauge(records);
+  renderTop5Actors(records);
+  renderShiftAnalysis(records);
+  renderShiftDetail(records);
+  renderShiftMatrix(records);
+  renderQualityAlerts(records);
 }
 
 function dashboardPeriodLabel() {
@@ -887,8 +917,560 @@ function groupCount(records, key) {
   return [...map.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
 }
 
-function renderBars(id, items) {
+function groupSum(records, keyGroup, keyValue) {
+  const map = new Map();
+  records.forEach((r) => {
+    const label = r[keyGroup] || 'ไม่ระบุ';
+    map.set(label, (map.get(label) || 0) + num(r[keyValue]));
+  });
+  return [...map.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+}
+
+function parseDateFromRecord(dateStr) {
+  if (!dateStr) return null;
+  const s = String(dateStr).trim();
+  // Try DD/MM/YYYY or DD-MM-YYYY
+  let m = s.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/);
+  if (m) {
+    let year = parseInt(m[3], 10);
+    if (year > 2400) year -= 543; // Convert from Buddhist Era
+    return { day: parseInt(m[1], 10), month: parseInt(m[2], 10), year };
+  }
+  // Try YYYY-MM-DD
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return { day: parseInt(m[3], 10), month: parseInt(m[2], 10), year: parseInt(m[1], 10) };
+  // Try DD/MM/YY
+  m = s.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{2})$/);
+  if (m) {
+    const year = 2000 + parseInt(m[3], 10);
+    return { day: parseInt(m[1], 10), month: parseInt(m[2], 10), year };
+  }
+  return null;
+}
+
+const CHART_COLORS = [
+  '#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6',
+  '#06b6d4','#f97316','#84cc16','#ec4899','#6366f1'
+];
+const MONTH_TH = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.',
+                   'ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+
+function renderCharts(records) {
+  if (typeof Chart === 'undefined') return;
+
+  const now = new Date();
+  const curMonth = now.getMonth() + 1;
+  const curYear = now.getFullYear();
+  const daysInMonth = new Date(curYear, curMonth, 0).getDate();
+
+  // Build daily counts for current month
+  const dailyCounts = Array(daysInMonth).fill(0);
+  const dailyValues = Array(daysInMonth).fill(0);
+  records.forEach((r) => {
+    const parsed = parseDateFromRecord(r.date);
+    if (parsed && parsed.month === curMonth && parsed.year === curYear) {
+      const idx = parsed.day - 1;
+      if (idx >= 0 && idx < daysInMonth) {
+        dailyCounts[idx]++;
+        dailyValues[idx] += num(r.totalValue);
+      }
+    }
+  });
+  const dayLabels = Array.from({ length: daysInMonth }, (_, i) => String(i + 1));
+  const monthLabel = MONTH_TH[curMonth - 1] + ' ' + (curYear + 543);
+  const el = $('chartMonthlyLabel');
+  if (el) el.textContent = 'เดือน ' + monthLabel + ' — เคส/วัน (ลากสี = มูลค่ารวม)';
+
+  // Monthly trend chart
+  const ctxM = $('chartMonthly');
+  if (ctxM) {
+    if (state.chartMonthly) { state.chartMonthly.destroy(); state.chartMonthly = null; }
+    state.chartMonthly = new Chart(ctxM, {
+      type: 'bar',
+      data: {
+        labels: dayLabels,
+        datasets: [
+          {
+            label: 'จำนวนเคส',
+            data: dailyCounts,
+            backgroundColor: 'rgba(59,130,246,0.7)',
+            borderColor: '#1d4ed8',
+            borderWidth: 1.5,
+            borderRadius: 5,
+            borderSkipped: false,
+            yAxisID: 'y'
+          },
+          {
+            label: 'มูลค่า (บาท)',
+            data: dailyValues,
+            type: 'line',
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245,158,11,0.08)',
+            borderWidth: 2,
+            pointBackgroundColor: '#f59e0b',
+            pointRadius: 3,
+            tension: 0.35,
+            fill: true,
+            yAxisID: 'y2'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top', labels: { font: { size: 11, weight: 'bold' }, boxWidth: 12, padding: 12 } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ctx.datasetIndex === 0
+                ? ' เคส: ' + ctx.parsed.y + ' รายการ'
+                : ' มูลค่า: ' + ctx.parsed.y.toLocaleString('th-TH', { maximumFractionDigits: 0 }) + ' บาท'
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            ticks: { font: { size: 10 }, maxRotation: 0 }
+          },
+          y: {
+            type: 'linear', position: 'left',
+            grid: { color: '#f1f5f9' },
+            ticks: { font: { size: 10 }, stepSize: 1, precision: 0 },
+            title: { display: true, text: 'เคส', font: { size: 10 } }
+          },
+          y2: {
+            type: 'linear', position: 'right',
+            grid: { drawOnChartArea: false },
+            ticks: { font: { size: 10 }, callback: (v) => v >= 1000 ? (v/1000).toFixed(1)+'K' : v },
+            title: { display: true, text: 'บาท', font: { size: 10 } }
+          }
+        }
+      }
+    });
+  }
+
+  // Damage type donut chart
+  const typeGroups = groupCount(records, 'damageType').slice(0, 6);
+  const ctxT = $('chartDamageType');
+  if (ctxT) {
+    if (state.chartType) { state.chartType.destroy(); state.chartType = null; }
+    if (typeGroups.length) {
+      state.chartType = new Chart(ctxT, {
+        type: 'doughnut',
+        data: {
+          labels: typeGroups.map((g) => g.label),
+          datasets: [{
+            data: typeGroups.map((g) => g.value),
+            backgroundColor: CHART_COLORS.slice(0, typeGroups.length),
+            borderWidth: 2,
+            borderColor: '#fff',
+            hoverOffset: 8
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: '60%',
+          plugins: {
+            legend: { position: 'bottom', labels: { font: { size: 10, weight: 'bold' }, boxWidth: 10, padding: 8 } },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => ` ${ctx.label}: ${ctx.parsed} เคส (${((ctx.parsed / records.length) * 100).toFixed(1)}%)`
+              }
+            }
+          }
+        }
+      });
+    }
+  }
+}
+
+function renderDetailStats(records) {
+  const box = $('detailStats');
+  if (!box) return;
+  if (!records.length) {
+    box.innerHTML = '<div class="empty">ไม่มีข้อมูล</div>';
+    return;
+  }
+
+  const total = records.length;
+  const totalQtyAll = records.reduce((s, r) => s + num(r.quantity), 0);
+  const totalValAll = records.reduce((s, r) => s + num(r.totalValue), 0);
+
+  // Group by shift
+  const shifts = groupCount(records, 'shift');
+  // Group by damage group
+  const dgroups = groupCount(records, 'damageGroup');
+  // Group by BU with value
+  const buVal = groupSum(records, 'bu', 'totalValue').slice(0, 5);
+
+  const shiftColors = ['blue','green','amber','purple','gray'];
+  const dgColors = ['red','amber','blue','green','gray'];
+
+  const shiftHtml = shifts.map((s, i) => `
+    <div class="dstat-row">
+      <span class="dstat-label"><span class="dstat-label-dot" style="background:${CHART_COLORS[i % CHART_COLORS.length]}"></span>${esc(s.label)}</span>
+      <span class="dstat-values">
+        <span class="dstat-chip ${shiftColors[i % shiftColors.length]}">${s.value} เคส</span>
+        <span class="dstat-chip gray">${((s.value / total) * 100).toFixed(0)}%</span>
+      </span>
+    </div>`).join('');
+
+  const dgHtml = dgroups.map((d, i) => `
+    <div class="dstat-row">
+      <span class="dstat-label"><span class="dstat-label-dot" style="background:${CHART_COLORS[(i + 3) % CHART_COLORS.length]}"></span>${esc(d.label)}</span>
+      <span class="dstat-values">
+        <span class="dstat-chip ${dgColors[i % dgColors.length]}">${d.value} เคส</span>
+      </span>
+    </div>`).join('');
+
+  const buValHtml = buVal.map((b, i) => `
+    <div class="dstat-row">
+      <span class="dstat-label"><span class="dstat-label-dot" style="background:${CHART_COLORS[i % CHART_COLORS.length]}"></span>${esc(b.label)}</span>
+      <span class="dstat-values">
+        <span class="dstat-chip purple">${b.value.toLocaleString('th-TH', { maximumFractionDigits: 0 })} บ.</span>
+      </span>
+    </div>`).join('');
+
+  box.innerHTML = `
+    <div class="dstat-group">
+      <div class="dstat-group-title">🌙 แยกตามกะ</div>
+      ${shiftHtml || '<span style="color:var(--muted);font-size:12px">ไม่มีข้อมูลกะ</span>'}
+    </div>
+    <div class="dstat-group">
+      <div class="dstat-group-title">📦 หมวดเสียหาย</div>
+      ${dgHtml || '<span style="color:var(--muted);font-size:12px">ไม่มีข้อมูลหมวดเสียหาย</span>'}
+    </div>
+    <div class="dstat-group">
+      <div class="dstat-group-title">🏷️ มูลค่าตาม BU</div>
+      ${buValHtml || '<span style="color:var(--muted);font-size:12px">ไม่มีข้อมูล BU</span>'}
+    </div>
+  `;
+}
+
+/* ================================================
+   BUDGET QUOTA
+   ================================================ */
+function setupBudget() {
+  const now = new Date();
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const stored = localStorage.getItem('budgetQuota_' + monthKey);
+  if (stored) {
+    const el = $('budgetQuota');
+    if (el) el.value = stored;
+    updateBudgetLabel(monthKey);
+  }
+  const btn = $('btnSetBudget');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      const v = parseFloat($('budgetQuota').value || '0');
+      if (v > 0) {
+        localStorage.setItem('budgetQuota_' + monthKey, String(v));
+        updateBudgetLabel(monthKey);
+        updateBudgetGauge(state.dashboardRecords || []);
+        toast('บันทึกโควต้างบเรียบร้อย', 'ok');
+      }
+    });
+  }
+  updateBudgetLabel(monthKey);
+}
+
+function updateBudgetLabel(monthKey) {
+  const quota = parseFloat(localStorage.getItem('budgetQuota_' + monthKey) || '0');
+  const parts = (monthKey || '').split('-');
+  const monthLabel = parts.length === 2 ? MONTH_TH[parseInt(parts[1], 10) - 1] + ' ' + (parseInt(parts[0], 10) + 543) : '—';
+  const el = $('budgetMonthLabel');
+  if (el) el.textContent = 'โควต้าเดือน ' + monthLabel + (quota > 0 ? ' · ' + quota.toLocaleString('th-TH', { maximumFractionDigits: 0 }) + ' บาท' : ' · ยังไม่ได้ตั้ง');
+  const ql = $('budgetQuotaLabel');
+  if (ql) ql.textContent = quota > 0 ? 'โควต้า: ' + quota.toLocaleString('th-TH', { maximumFractionDigits: 2 }) + ' บาท' : 'ไม่ได้ตั้งโควต้า';
+}
+
+function updateBudgetGauge(records) {
+  const now = new Date();
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const quota = parseFloat(localStorage.getItem('budgetQuota_' + monthKey) || '0');
+  const totalValue = records.reduce((s, r) => s + num(r.totalValue), 0);
+
+  const usedEl = $('budgetUsed');
+  if (usedEl) usedEl.textContent = '฿ ' + totalValue.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const fill = $('budgetBarFill');
+  const pct = $('budgetPct');
+  if (!fill || !pct) return;
+
+  if (!quota) {
+    fill.style.width = '0%';
+    fill.className = 'budget-bar-fill';
+    pct.textContent = '—';
+    pct.className = 'budget-pct';
+    return;
+  }
+
+  const ratio = totalValue / quota;
+  const pctNum = Math.round(ratio * 100);
+  fill.style.width = Math.min(ratio * 100, 100) + '%';
+  pct.textContent = pctNum + '%';
+
+  if (ratio >= 1) { fill.className = 'budget-bar-fill over'; pct.className = 'budget-pct over'; }
+  else if (ratio >= 0.8) { fill.className = 'budget-bar-fill warn'; pct.className = 'budget-pct warn'; }
+  else { fill.className = 'budget-bar-fill'; pct.className = 'budget-pct ok'; }
+}
+
+/* ================================================
+   DATA QUALITY SCORE
+   ================================================ */
+function renderDataQuality(records) {
+  if (!records.length) return;
+  const n = records.length;
+
+  const pct = (fn) => Math.round((records.filter(fn).length / n) * 100);
+  const img1 = pct((r) => r.image1 && r.image1.hasImage);
+  const img2 = pct((r) => r.image2 && r.image2.hasImage);
+  const actor = pct((r) => String(r.actor || '').trim() !== '');
+  const emp = pct((r) => String(r.employeeId || '').trim() !== '');
+  const val_ = pct((r) => num(r.totalValue) > 0);
+  const acc = pct((r) => String(r.accountGroup || '').trim() !== '');
+
+  const score = Math.round((img1 + img2 + actor + emp + val_ + acc) / 6);
+
+  const setField = (id, pctId, v) => {
+    const el = $(id); if (el) el.style.width = v + '%';
+    const pe = $(pctId); if (pe) pe.textContent = v + '%';
+  };
+  setField('qfImage1', 'qfImage1Pct', img1);
+  setField('qfImage2', 'qfImage2Pct', img2);
+  setField('qfActor', 'qfActorPct', actor);
+  setField('qfEmployee', 'qfEmployeePct', emp);
+  setField('qfValue', 'qfValuePct', val_);
+  setField('qfAccount', 'qfAccountPct', acc);
+
+  const scoreEl = $('qualityScore');
+  if (scoreEl) scoreEl.textContent = score;
+
+  const gauge = $('qualityGaugeFill');
+  if (gauge) {
+    const circ = 238.76;
+    const offset = circ - (score / 100) * circ;
+    gauge.style.strokeDashoffset = offset;
+    gauge.style.stroke = score >= 80 ? '#10b981' : score >= 60 ? '#f59e0b' : '#ef4444';
+  }
+}
+
+/* ================================================
+   EXTENDED KPIs
+   ================================================ */
+function renderExtendedKPIs(records) {
+  const skuSet = new Set(records.map((r) => r.barcode).filter(Boolean));
+  const el = $('kpiSkuCount'); if (el) el.textContent = skuSet.size;
+
+  const shifts = groupCount(records, 'shift');
+  const topShift = shifts[0];
+  const tsEl = $('kpiTopShift');
+  const tsSub = $('kpiTopShiftSub');
+  if (tsEl) tsEl.textContent = topShift ? (topShift.label || '—') : '—';
+  if (tsSub && topShift) {
+    const qty = records.filter((r) => r.shift === topShift.label).reduce((s, r) => s + num(r.quantity), 0);
+    tsSub.textContent = topShift.value + ' เคส · ' + number(qty) + ' หน่วย';
+  }
+
+  const expCount = records.filter((r) => String(r.expiryDate || '').trim() !== '').length;
+  const exEl = $('kpiExpiry'); if (exEl) exEl.textContent = expCount;
+
+  const evCount = records.filter((r) => (r.image1 && r.image1.hasImage) || (r.image2 && r.image2.hasImage) || (r.image3 && r.image3.hasImage)).length;
+  const evEl = $('kpiEvidencePct');
+  if (evEl) evEl.textContent = records.length ? Math.round((evCount / records.length) * 100) + '%' : '0%';
+}
+
+/* ================================================
+   TREEMAP CHARTS
+   ================================================ */
+const TREEMAP_SHIFT_COLORS = [
+  'linear-gradient(135deg,#0ea5e9,#3b82f6)',
+  'linear-gradient(135deg,#1d4ed8,#6366f1)',
+  'linear-gradient(135deg,#06b6d4,#0891b2)',
+];
+const TREEMAP_GROUP_COLORS = [
+  'linear-gradient(135deg,#f97316,#f59e0b)',
+  'linear-gradient(135deg,#ef4444,#f97316)',
+  'linear-gradient(135deg,#eab308,#f59e0b)',
+  'linear-gradient(135deg,#dc2626,#ef4444)',
+];
+
+function renderTreemaps(records) {
+  renderTreemap('treemapShift', groupCount(records, 'shift'), TREEMAP_SHIFT_COLORS);
+  renderTreemap('treemapGroup', groupCount(records, 'damageGroup'), TREEMAP_GROUP_COLORS);
+}
+
+function renderTreemap(id, items, colors) {
   const box = $(id);
+  if (!box) return;
+  if (!items.length) { box.innerHTML = '<div class="empty">ไม่มีข้อมูล</div>'; return; }
+  
+  const top = items.slice(0, 5);
+  const total = top.reduce((sum, item) => sum + item.value, 0);
+  
+  if (total === 0) {
+    box.innerHTML = '<div class="empty">ไม่มีข้อมูล</div>';
+    return;
+  }
+
+  const segmentsHtml = top.map((item, i) => {
+    const pct = ((item.value / total) * 100).toFixed(1);
+    const bg = colors[i % colors.length];
+    return `
+      <div class="treemap-segment" style="width:${pct}%; background:${bg}" title="${esc(item.label || 'ไม่ระบุ')}: ${item.value} เคส (${pct}%)">
+      </div>
+    `;
+  }).join('');
+
+  const legendHtml = top.map((item, i) => {
+    const pct = ((item.value / total) * 100).toFixed(1);
+    const bg = colors[i % colors.length];
+    return `
+      <div class="treemap-legend-item">
+        <span class="legend-color-dot" style="background:${bg}"></span>
+        <span class="legend-label"><b>${esc(item.label || 'ไม่ระบุ')}</b></span>
+        <span class="legend-val">${number(item.value)} (${pct}%)</span>
+      </div>
+    `;
+  }).join('');
+
+  box.innerHTML = `
+    <div class="treemap-container">
+      <div class="treemap-bar-stack">
+        ${segmentsHtml}
+      </div>
+      <div class="treemap-legend">
+        ${legendHtml}
+      </div>
+    </div>
+  `;
+}
+
+/* ================================================
+   TOP 5 PRODUCTS
+   ================================================ */
+function groupByProduct(records) {
+  const map = new Map();
+  records.forEach((r) => {
+    const key = r.barcode || r.itemName || 'ไม่ระบุ';
+    if (!map.has(key)) map.set(key, { label: r.itemName || key, sub: [r.bu, r.damageType, r.damageDescription].filter(Boolean).join(' · '), count: 0, qty: 0, value: 0, barcode: r.barcode || '' });
+    const e = map.get(key);
+    e.count++;
+    e.qty += num(r.quantity);
+    e.value += num(r.totalValue);
+  });
+  return [...map.values()].sort((a, b) => b.count - a.count);
+}
+
+const RANK_CLASS = ['r1', 'r2', 'r3', '', ''];
+
+function renderTop5Products(records) {
+  const byCount = groupByProduct(records).slice(0, 5);
+  const byValue = [...groupByProduct(records)].sort((a, b) => b.value - a.value).slice(0, 5);
+
+  const makeItem = (item, i, showValue) => `
+    <div class="top5-item">
+      <span class="top5-rank ${RANK_CLASS[i] || ''}">${i + 1}</span>
+      <div class="top5-info">
+        <b>${esc(item.label)}</b>
+        <p>${esc(item.sub || item.barcode || '')}</p>
+      </div>
+      <div class="top5-stats">
+        ${showValue
+          ? `<span class="top5-value">${money(item.value)}</span><span class="top5-unit">${item.count} เคส · ${number(item.qty)} หน่วย</span>`
+          : `<b class="top5-count">${item.count}</b><span class="top5-unit">${number(item.qty)} หน่วย</span>`
+        }
+      </div>
+    </div>`;
+
+  const p5 = $('top5Products');
+  if (p5) p5.innerHTML = byCount.length ? byCount.map((it, i) => makeItem(it, i, false)).join('') : '<div class="empty">ไม่มีข้อมูล</div>';
+
+  const pv5 = $('top5ProductsValue');
+  if (pv5) pv5.innerHTML = byValue.length ? byValue.map((it, i) => makeItem(it, i, true)).join('') : '<div class="empty">ไม่มีข้อมูล</div>';
+
+  // Top 5 damage descriptions (root cause)
+  const rootCause = groupByDescription(records).slice(0, 5);
+  const rc = $('top5RootCause');
+  if (rc) rc.innerHTML = rootCause.length ? rootCause.map((it, i) => `
+    <div class="top5-item">
+      <span class="top5-rank ${RANK_CLASS[i] || ''}">${i + 1}</span>
+      <div class="top5-info">
+        <b>${esc(it.label)}</b>
+        <p>${esc(it.sub || '')}</p>
+      </div>
+      <div class="top5-stats">
+        <b class="top5-count">${it.count}</b>
+        <span class="top5-unit">${number(it.qty)} หน่วย</span>
+      </div>
+    </div>`).join('') : '<div class="empty">ไม่มีข้อมูล</div>';
+
+  // Top 5 BU by case count
+  const top5bu = groupCount(records, 'bu').slice(0, 5);
+  renderValueBars('top5Bu', top5bu.map((b) => ({ label: b.label, value: b.value, sub: '' })), false);
+
+  // Top 5 types
+  const top5t = groupCount(records, 'damageType').slice(0, 5);
+  renderValueBars('top5Types', top5t.map((t) => ({ label: t.label, value: t.value, sub: '' })), false);
+}
+
+function groupByDescription(records) {
+  const map = new Map();
+  records.forEach((r) => {
+    const key = r.damageDescription || 'ไม่ระบุ';
+    if (!map.has(key)) map.set(key, { label: key, sub: [r.bu, r.damageType].filter(Boolean).join(' · '), count: 0, qty: 0 });
+    const e = map.get(key);
+    e.count++;
+    e.qty += num(r.quantity);
+  });
+  return [...map.values()].sort((a, b) => b.count - a.count);
+}
+
+/* ================================================
+   VALUE BREAKDOWNS
+   ================================================ */
+function renderAllValueBreakdowns(records) {
+  const buV = groupSum(records, 'bu', 'totalValue');
+  const typeV = groupSum(records, 'damageType', 'totalValue');
+  const shiftV = groupSum(records, 'shift', 'totalValue');
+  const affV = groupSum(records, 'affiliation', 'totalValue');
+  const accV = groupSum(records, 'accountGroup', 'totalValue');
+
+  const buCount = (label) => records.filter((r) => r.bu === label).length;
+  const typeCount = (label) => records.filter((r) => r.damageType === label).length;
+  const shiftCount = (label) => records.filter((r) => r.shift === label).length;
+
+  renderValueBars('valueBu', buV.map((b) => ({ label: b.label, value: b.value, sub: buCount(b.label) + ' เคส' })), true);
+  renderValueBars('valueType', typeV.map((t) => ({ label: t.label, value: t.value, sub: typeCount(t.label) + ' เคส' })), true);
+  renderValueBars('valueShift', shiftV.map((s) => ({ label: s.label, value: s.value, sub: shiftCount(s.label) + ' เคส' })), true);
+  renderValueBars('valueAffiliation', affV.slice(0, 6).map((a) => ({ label: a.label || 'ไม่ระบุ', value: a.value, sub: '' })), true);
+  renderValueBars('valueAccount', accV.slice(0, 6).map((a) => ({ label: a.label || 'ไม่ระบุ', value: a.value, sub: '' })), true);
+}
+
+function renderValueBars(id, items, showMoney) {
+  const box = $(id);
+  if (!box) return;
+  if (!items.length) { box.innerHTML = '<div class="empty">ไม่มีข้อมูล</div>'; return; }
+  const max = Math.max(...items.map((x) => x.value), 1);
+  box.innerHTML = items.map((item) => `
+    <div class="bar-row">
+      <div class="bar-head">
+        <span>${esc(item.label)}</span>
+        <b>${showMoney ? money(item.value) : number(item.value)}</b>
+      </div>
+      ${item.sub ? `<div class="bar-sub">${esc(item.sub)}</div>` : ''}
+      <div class="bar-track"><span class="bar-fill" style="width:${Math.max(4, (item.value / max) * 100)}%"></span></div>
+    </div>
+  `).join('');
+}
+
+function renderBars(id, items) {
+
+  const box = $(id);
+  const isV2 = box && box.classList.contains('v2');
   if (!items.length) {
     box.innerHTML = '<div class="empty">ไม่มีข้อมูล</div>';
     return;
@@ -1008,8 +1590,10 @@ async function deleteRecord(rowNumber) {
     const data = unwrapApi(res);
     toast(data.message || 'ลบข้อมูลแล้ว', 'ok');
     if (state.editingRowNumber === row) resetForm(true);
-    await refreshLatest();
-    await refreshDashboard();
+    await Promise.all([
+      refreshLatest(),
+      refreshDashboard()
+    ]);
   } catch (err) {
     toast('ลบข้อมูลไม่สำเร็จ: ' + (err.message || err), 'bad');
   } finally {
@@ -1193,7 +1777,15 @@ function ensureSelectValue(id, value) {
 }
 
 function loading(show) {
-  $('loading').classList.toggle('hidden', !show);
+  if (show) {
+    state.loadingCount++;
+    $('loading').classList.remove('hidden');
+  } else {
+    state.loadingCount = Math.max(0, state.loadingCount - 1);
+    if (state.loadingCount === 0) {
+      $('loading').classList.add('hidden');
+    }
+  }
 }
 
 function toast(message, type) {
@@ -1321,6 +1913,331 @@ function esc(value) {
 
 function escAttr(value) {
   return esc(value).replace(/`/g, '&#096;');
+}
+
+/* ================================================
+   TOP 5 ACTORS & SHIFT & QUALITY ANALYSIS
+   ================================================ */
+function renderTop5Actors(records) {
+  const map = new Map();
+  records.forEach((r) => {
+    const actor = String(r.actor || '').trim() || 'ไม่ระบุผู้กระทำ';
+    const aff = String(r.affiliation || '').trim();
+    const key = actor;
+    if (!map.has(key)) {
+      map.set(key, {
+        label: actor,
+        sub: aff || 'ไม่ระบุสังกัด',
+        count: 0,
+        qty: 0,
+        value: 0
+      });
+    }
+    const e = map.get(key);
+    e.count++;
+    e.qty += num(r.quantity);
+    e.value += num(r.totalValue);
+  });
+  
+  const sorted = [...map.values()].sort((a, b) => b.count - a.count).slice(0, 5);
+  
+  const box = $('top5Actors');
+  if (!box) return;
+  if (!sorted.length) {
+    box.innerHTML = '<div class="empty">ไม่มีข้อมูล</div>';
+    return;
+  }
+  
+  const RANK_CLASS = ['r1', 'r2', 'r3', '', ''];
+  box.innerHTML = sorted.map((item, i) => `
+    <div class="top5-item">
+      <span class="top5-rank ${RANK_CLASS[i] || ''}">${i + 1}</span>
+      <div class="top5-info">
+        <b>${esc(item.label)}</b>
+        <p>${esc(item.sub)}</p>
+      </div>
+      <div class="top5-stats">
+        <b class="top5-count">${item.count}</b>
+        <span class="top5-unit">${number(item.qty)} หน่วย</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderShiftAnalysis(records) {
+  // วิเคราะห์ตามกะ (Shift Case Bars)
+  const shiftMap = new Map();
+  records.forEach((r) => {
+    let s = String(r.shift || '').trim();
+    if (!s) return;
+    if (s === 'A' || s === 'กะ A') s = 'กะ A';
+    else if (s === 'B' || s === 'กะ B') s = 'กะ B';
+    
+    shiftMap.set(s, (shiftMap.get(s) || 0) + 1);
+  });
+  
+  const shiftItems = [...shiftMap.entries()]
+    .map(([label, value]) => ({ label, value, sub: '' }))
+    .sort((a, b) => b.value - a.value);
+
+  renderValueBars('shiftCaseBars', shiftItems, false);
+
+  // วิเคราะห์หมู่เสียหาย (Group Case Bars)
+  const groupMap = new Map();
+  records.forEach((r) => {
+    const g = String(r.damageGroup || '').trim() || 'ไม่ระบุกลุ่ม';
+    groupMap.set(g, (groupMap.get(g) || 0) + 1);
+  });
+  
+  const groupItems = [...groupMap.entries()]
+    .map(([label, value]) => ({ label, value, sub: '' }))
+    .sort((a, b) => b.value - a.value);
+
+  renderValueBars('groupCaseBars', groupItems, false);
+}
+
+function renderShiftDetail(records) {
+  const shifts = ['B', 'A']; // Show B then A
+  
+  const cardsHtml = shifts.map((shCode) => {
+    const label = shCode === 'B' ? 'กะ B' : 'กะ A';
+    const shRecords = records.filter((r) => {
+      const s = String(r.shift || '').trim();
+      return s === shCode || s === 'กะ ' + shCode;
+    });
+    
+    const cases = shRecords.length;
+    const qty = shRecords.reduce((sum, r) => sum + num(r.quantity), 0);
+    const value = shRecords.reduce((sum, r) => sum + num(r.totalValue), 0);
+    
+    const buCounts = groupCount(shRecords, 'bu');
+    const topBu = buCounts[0] ? buCounts[0].label : 'ไม่มี';
+    
+    const typeCounts = groupCount(shRecords, 'damageType');
+    const topType = typeCounts[0] ? typeCounts[0].label : 'ไม่มี';
+    
+    const prodCounts = groupByProduct(shRecords);
+    const topProd = prodCounts[0] ? prodCounts[0].label : 'ไม่มี';
+    
+    return `
+      <div class="shift-card">
+        <div class="shift-card-head">
+          <h4>${esc(label)}</h4>
+          <span class="chip ${shCode === 'B' ? 'blue' : 'purple'}">กะทำงาน</span>
+        </div>
+        <div class="shift-card-body">
+          <div class="shift-stat-grid">
+            <div class="shift-stat-item">
+              <span>จำนวนเคส</span>
+              <b>${number(cases)} เคส</b>
+            </div>
+            <div class="shift-stat-item">
+              <span>จำนวนชิ้น</span>
+              <b>${number(qty)} ชิ้น</b>
+            </div>
+            <div class="shift-stat-item">
+              <span>มูลค่ารวม</span>
+              <b class="purple-text">${money(value)} บ.</b>
+            </div>
+          </div>
+          <div class="shift-meta-list">
+            <div class="shift-meta-item">
+              <span class="meta-label">BU หลัก:</span>
+              <span class="meta-val">${esc(topBu)}</span>
+            </div>
+            <div class="shift-meta-item">
+              <span class="meta-label">ประเภทหลัก:</span>
+              <span class="meta-val">${esc(topType)}</span>
+            </div>
+            <div class="shift-meta-item">
+              <span class="meta-label">สินค้าหลัก:</span>
+              <span class="meta-val" title="${escAttr(topProd)}">${esc(topProd)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  
+  const detailEl = $('shiftDetailCards');
+  if (detailEl) detailEl.innerHTML = cardsHtml;
+  
+  const RANK_CLASS = ['r1', 'r2', 'r3', '', ''];
+  const renderTop5ForShift = (id, shCode) => {
+    const shRecords = records.filter((r) => {
+      const s = String(r.shift || '').trim();
+      return s === shCode || s === 'กะ ' + shCode;
+    });
+    const byCount = groupByProduct(shRecords).slice(0, 5);
+    const box = $(id);
+    if (!box) return;
+    if (!byCount.length) {
+      box.innerHTML = '<div class="empty">ไม่มีข้อมูล</div>';
+      return;
+    }
+    box.innerHTML = byCount.map((item, i) => `
+      <div class="top5-item">
+        <span class="top5-rank ${RANK_CLASS[i] || ''}">${i + 1}</span>
+        <div class="top5-info">
+          <b>${esc(item.label)}</b>
+          <p>${esc(item.sub || item.barcode || '')}</p>
+        </div>
+        <div class="top5-stats">
+          <b class="top5-count">${item.count}</b>
+          <span class="top5-unit">${number(item.qty)} หน่วย</span>
+        </div>
+      </div>
+    `).join('');
+  };
+  
+  renderTop5ForShift('shiftBTop5', 'B');
+  renderTop5ForShift('shiftATop5', 'A');
+}
+
+function renderShiftMatrix(records) {
+  const box = $('shiftMatrix');
+  if (!box) return;
+  
+  const types = state.options.damageTypes || [];
+  const shifts = ['B', 'A'];
+  
+  const matrix = {};
+  let maxCount = 0;
+  
+  types.forEach((t) => {
+    matrix[t] = {};
+    shifts.forEach((s) => {
+      matrix[t][s] = 0;
+    });
+  });
+  
+  records.forEach((r) => {
+    let s = String(r.shift || '').trim();
+    if (s === 'A' || s === 'กะ A') s = 'A';
+    else if (s === 'B' || s === 'กะ B') s = 'B';
+    
+    const t = String(r.damageType || '').trim();
+    if (matrix[t] && matrix[t][s] !== undefined) {
+      matrix[t][s]++;
+      if (matrix[t][s] > maxCount) maxCount = matrix[t][s];
+    }
+  });
+  
+  if (maxCount === 0) maxCount = 1;
+  
+  let html = `
+    <thead>
+      <tr>
+        <th>ประเภทสินค้า</th>
+        <th>กะ B (เคส)</th>
+        <th>กะ A (เคส)</th>
+      </tr>
+    </thead>
+    <tbody>
+  `;
+  
+  types.forEach((t) => {
+    html += `<tr><td class="matrix-type-label"><b>${esc(t)}</b></td>`;
+    shifts.forEach((s) => {
+      const count = matrix[t][s];
+      const ratio = count / maxCount;
+      const bg = count > 0 ? `rgba(59, 130, 246, ${Math.max(0.06, ratio * 0.95)})` : 'transparent';
+      const color = count > 0 ? (ratio > 0.5 ? '#1e3a8a' : '#1e3a8a') : 'var(--muted)';
+      const style = count > 0 ? `style="background:${bg};color:${color};font-weight:900;"` : 'style="color:var(--muted); opacity: 0.5;"';
+      html += `<td class="matrix-cell" ${style}>${count}</td>`;
+    });
+    html += `</tr>`;
+  });
+  
+  html += `</tbody>`;
+  box.innerHTML = html;
+}
+
+function renderQualityAlerts(records) {
+  const box = $('qualityAlerts');
+  if (!box) return;
+  
+  const alerts = [];
+  
+  const noBarcodeImg = records.filter((r) => !r.image1 || !r.image1.hasImage);
+  if (noBarcodeImg.length > 0) {
+    alerts.push({
+      type: 'warning',
+      icon: '📷',
+      title: 'ขาดรูปภาพ Barcode',
+      desc: `พบ ${noBarcodeImg.length} เคสที่ไม่มีการแนบรูปภาพบาร์โค้ดสินค้า`
+    });
+  }
+  
+  const noProductImg = records.filter((r) => !r.image2 || !r.image2.hasImage);
+  if (noProductImg.length > 0) {
+    alerts.push({
+      type: 'warning',
+      icon: '📦',
+      title: 'ขาดรูปภาพลักษณะสินค้าเสียหาย',
+      desc: `พบ ${noProductImg.length} เคสที่ไม่ได้ถ่ายลักษณะความเสียหายจริง`
+    });
+  }
+
+  const noActor = records.filter((r) => {
+    const act = String(r.actor || '').trim();
+    return !act || act.includes('ไม่ทราบ') || act.includes('ไม่พบ');
+  });
+  if (noActor.length > 0) {
+    alerts.push({
+      type: 'danger',
+      icon: '👤',
+      title: 'ไม่ทราบผู้เกี่ยวข้อง / ผู้กระทำ',
+      desc: `พบ ${noActor.length} เคสที่ไม่ระบุชื่อผู้กระทำหรือเลือกไม่พบผู้เกี่ยวข้อง`
+    });
+  }
+
+  const noEmpId = records.filter((r) => {
+    const act = String(r.actor || '').trim();
+    const hasActorName = act && !act.includes('ไม่ทราบ') && !act.includes('ไม่พบ');
+    return hasActorName && !String(r.employeeId || '').trim();
+  });
+  if (noEmpId.length > 0) {
+    alerts.push({
+      type: 'info',
+      icon: '🆔',
+      title: 'มีชื่อผู้เกี่ยวข้องแต่ไม่มีรหัสพนักงาน',
+      desc: `พบ ${noEmpId.length} เคสที่มีชื่อผู้กระทำแต่ขาดรหัสพนักงาน`
+    });
+  }
+
+  const noValue = records.filter((r) => num(r.totalValue) === 0);
+  if (noValue.length > 0) {
+    alerts.push({
+      type: 'danger',
+      icon: '💰',
+      title: 'ไม่พบราคาทุนสินค้า / มูลค่าเป็น 0',
+      desc: `พบ ${noValue.length} เคสที่มีมูลค่าความเสียหายเป็น 0`
+    });
+  }
+  
+  if (!alerts.length) {
+    box.innerHTML = `
+      <div class="quality-success-alert">
+        <span class="alert-icon">✨</span>
+        <div>
+          <b>ข้อมูลสมบูรณ์ 100%!</b>
+          <p>ทุกเคสมีรูปภาพครบถ้วน ระบุตัวผู้กระทำ และมีมูลค่าความเสียหายครบทุกรายการ</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  
+  box.innerHTML = alerts.map((alert) => `
+    <div class="q-alert-card ${alert.type}">
+      <span class="q-alert-icon">${alert.icon}</span>
+      <div class="q-alert-text">
+        <b>${esc(alert.title)}</b>
+        <p>${esc(alert.desc)}</p>
+      </div>
+    </div>
+  `).join('');
 }
 
 function debounce(fn, wait) {

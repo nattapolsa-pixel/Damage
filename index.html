@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Damage 2026 Form</title>
   <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="ux-aurora" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -395,15 +396,17 @@
 
     <section id="dashboardPage" class="page view-page">
       <section class="panel card dashboard-page">
-        <div class="dashboard-hero">
-          <div class="dash-hero-main">
-            <p class="eyebrow">Executive Dashboard · Damage_2026</p>
-            <h2>Dashboard สรุปสินค้าเสียหายสำหรับผู้บริหาร</h2>
-            <p>สรุปจำนวนเคส มูลค่าความเสียหาย Top BU และ Top ประเภทสินค้า ตามเงื่อนไขที่เลือก</p>
+        <div class="dash-header-band">
+          <div class="dash-header-left">
+            <div class="dash-header-icon">📊</div>
+            <div>
+              <p class="dash-header-eyebrow">Executive Dashboard · Damage_2026</p>
+              <h2 class="dash-header-title">Dashboard สรุปสินค้าเสียหาย</h2>
+            </div>
           </div>
-          <div class="dash-hero-side">
-            <div class="dash-date-pill"><span>ช่วงข้อมูล</span><b id="dashPeriodLabel">30 วันล่าสุด</b></div>
-            <div class="dash-date-pill"><span>จำนวนข้อมูลที่ใช้วิเคราะห์</span><b id="dashRecordLabel">-</b></div>
+          <div class="dash-header-pills">
+            <div class="dash-stat-pill dash-pill-blue"><span class="dsp-label">ช่วงข้อมูล</span><b class="dsp-value" id="dashPeriodLabel">30 วันล่าสุด</b></div>
+            <div class="dash-stat-pill dash-pill-green"><span class="dsp-label">รายการที่วิเคราะห์</span><b class="dsp-value" id="dashRecordLabel">-</b></div>
           </div>
         </div>
 
@@ -448,32 +451,460 @@
           <button class="btn primary" id="btnRefreshDashboard">อัปเดต Dashboard</button>
         </div>
 
-        <div class="dash-kpi-grid">
-          <div class="dash-kpi"><span class="k">จำนวนเคส</span><b class="v" id="kpiCases">0</b><span class="s">ตามเงื่อนไขที่เลือก</span></div>
-          <div class="dash-kpi"><span class="k">จำนวนชิ้นรวม</span><b class="v" id="kpiQty">0</b><span class="s">รวมจำนวนทั้งหมด</span></div>
-          <div class="dash-kpi"><span class="k">มูลค่ารวม</span><b class="v" id="kpiValue">0</b><span class="s">จากราคาทุน</span></div>
-          <div class="dash-kpi"><span class="k">ไม่พบผู้กระทำ</span><b class="v" id="kpiNoActor">0</b><span class="s">ต้องติดตามเพิ่มเติม</span></div>
+        <!-- Budget + Quality + Extended KPIs Row -->
+        <div class="dash-bq-row">
+          <!-- Budget Quota Card -->
+          <div class="dash-chart-panel dash-budget-card">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-green"></span>
+                <h3>💵 โควต้างบรายเดือน</h3>
+              </div>
+              <p id="budgetMonthLabel">เดือนปัจจุบัน</p>
+            </div>
+            <div class="budget-input-group">
+              <input type="number" id="budgetQuota" class="budget-input" placeholder="งบเช่น 100000" min="0" step="1000" />
+              <button class="btn primary" id="btnSetBudget" style="min-height:38px;padding:6px 14px">ตั้งค่า</button>
+            </div>
+            <div class="budget-compare">
+              <div class="budget-compare-row">
+                <span>ใช้ไปแล้ว</span>
+                <b id="budgetUsed">฿ 0.00</b>
+              </div>
+              <div class="budget-bar-track">
+                <div class="budget-bar-fill" id="budgetBarFill" style="width:0%"></div>
+              </div>
+              <div class="budget-compare-row">
+                <span class="budget-pct" id="budgetPct">—</span>
+                <span id="budgetQuotaLabel" style="font-size:11px;color:var(--muted)">ไม่ได้ตั้งโควต้า</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Data Quality Score -->
+          <div class="dash-chart-panel dash-quality-card">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-blue"></span>
+                <h3>Data Quality Score</h3>
+                <span class="chip blue" style="margin-left:auto">คุณภาพ</span>
+              </div>
+              <p>คะแนนความครบถ้วนของข้อมูลและหลักฐาน</p>
+            </div>
+            <div class="quality-body">
+              <div class="quality-gauge-wrap">
+                <svg class="quality-gauge" viewBox="0 0 100 100">
+                  <circle class="quality-gauge-bg" cx="50" cy="50" r="38"/>
+                  <circle class="quality-gauge-fill" id="qualityGaugeFill" cx="50" cy="50" r="38"/>
+                </svg>
+                <div class="quality-gauge-label">
+                  <b id="qualityScore">—</b>
+                  <span>/100</span>
+                </div>
+              </div>
+              <div class="quality-fields">
+                <div class="quality-field-row"><span class="qf-label">รูปหลักฐาน</span><div class="qf-bar-track"><div class="qf-bar-fill qf-blue" id="qfImage1"></div></div><span class="qf-pct" id="qfImage1Pct">0%</span></div>
+                <div class="quality-field-row"><span class="qf-label">รูปสินค้า</span><div class="qf-bar-track"><div class="qf-bar-fill qf-blue" id="qfImage2"></div></div><span class="qf-pct" id="qfImage2Pct">0%</span></div>
+                <div class="quality-field-row"><span class="qf-label">ผู้เกี่ยวข้อง</span><div class="qf-bar-track"><div class="qf-bar-fill qf-amber" id="qfActor"></div></div><span class="qf-pct" id="qfActorPct">0%</span></div>
+                <div class="quality-field-row"><span class="qf-label">รหัสพนง.</span><div class="qf-bar-track"><div class="qf-bar-fill qf-amber" id="qfEmployee"></div></div><span class="qf-pct" id="qfEmployeePct">0%</span></div>
+                <div class="quality-field-row"><span class="qf-label">มูลค่า</span><div class="qf-bar-track"><div class="qf-bar-fill qf-green" id="qfValue"></div></div><span class="qf-pct" id="qfValuePct">0%</span></div>
+                <div class="quality-field-row"><span class="qf-label">กลุ่มบัญชี</span><div class="qf-bar-track"><div class="qf-bar-fill qf-red" id="qfAccount"></div></div><span class="qf-pct" id="qfAccountPct">0%</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Extended KPI mini cards -->
+          <div class="dash-ext-kpis">
+            <div class="ext-kpi">
+              <span class="ext-kpi-ico">🔖</span>
+              <div><span class="ext-kpi-label">SKU ที่กระทบ</span><b class="ext-kpi-value" id="kpiSkuCount">0</b><span class="ext-kpi-sub">นับ SKU ไม่ซ้ำ</span></div>
+            </div>
+            <div class="ext-kpi">
+              <span class="ext-kpi-ico">🌙</span>
+              <div><span class="ext-kpi-label">กะที่พบมากสุด</span><b class="ext-kpi-value" id="kpiTopShift">—</b><span class="ext-kpi-sub" id="kpiTopShiftSub">—</span></div>
+            </div>
+            <div class="ext-kpi">
+              <span class="ext-kpi-ico">📅</span>
+              <div><span class="ext-kpi-label">มีวันหมดอายุ</span><b class="ext-kpi-value" id="kpiExpiry">0</b><span class="ext-kpi-sub">มีวัน Expiry ระบุ</span></div>
+            </div>
+            <div class="ext-kpi">
+              <span class="ext-kpi-ico">📷</span>
+              <div><span class="ext-kpi-label">หลักฐานครบ</span><b class="ext-kpi-value" id="kpiEvidencePct">0%</b><span class="ext-kpi-sub">มีรูปอย่างน้อย 1 รูป</span></div>
+            </div>
+          </div>
         </div>
 
-        <div class="dashboard-grid">
-          <div class="dash-card mini-panel">
-            <div class="dash-card-head"><div><h3>Top BU ตามจำนวนเคส</h3><p>ดู BU ที่ควรโฟกัสใน Weekly Review</p></div><span class="chip green">BU</span></div>
-            <div id="topBu" class="bar-list"></div>
+        <div class="dash-kpi-grid">
+          <div class="dash-kpi dash-kpi-blue">
+            <div class="dash-kpi-top">
+              <span class="dash-kpi-ico">📋</span>
+              <span class="dash-kpi-badge">เคส</span>
+            </div>
+            <b class="v" id="kpiCases">0</b>
+            <span class="k">จำนวนเคสทั้งหมด</span>
+            <span class="s">ตามเงื่อนไขที่เลือก</span>
           </div>
-          <div class="dash-card mini-panel">
-            <div class="dash-card-head"><div><h3>Top ประเภทสินค้า</h3><p>ชำรุด / แตกแพค / หมดอายุ หรือประเภทที่กรอกเพิ่ม</p></div><span class="chip amber">Type</span></div>
-            <div id="topType" class="bar-list"></div>
+          <div class="dash-kpi dash-kpi-green">
+            <div class="dash-kpi-top">
+              <span class="dash-kpi-ico">📦</span>
+              <span class="dash-kpi-badge">ชิ้น</span>
+            </div>
+            <b class="v" id="kpiQty">0</b>
+            <span class="k">จำนวนชิ้นรวม</span>
+            <span class="s">รวมจำนวนทั้งหมด</span>
           </div>
-          <div class="dash-card mini-panel wide-panel">
-            <div class="dash-card-head"><div><h3>รายการล่าสุดในเงื่อนไขนี้</h3><p>ใช้ตรวจรายการล่าสุดและเปิดรูปหลักฐาน</p></div><span class="chip blue">Rows</span></div>
-            <div id="dashboardRows" class="cards-list compact"></div>
+          <div class="dash-kpi dash-kpi-purple">
+            <div class="dash-kpi-top">
+              <span class="dash-kpi-ico">💰</span>
+              <span class="dash-kpi-badge">บาท</span>
+            </div>
+            <b class="v" id="kpiValue">0</b>
+            <span class="k">มูลค่าความเสียหาย</span>
+            <span class="s">จากราคาทุน</span>
+          </div>
+          <div class="dash-kpi dash-kpi-red">
+            <div class="dash-kpi-top">
+              <span class="dash-kpi-ico">⚠️</span>
+              <span class="dash-kpi-badge">เคส</span>
+            </div>
+            <b class="v" id="kpiNoActor">0</b>
+            <span class="k">ไม่พบผู้กระทำ</span>
+            <span class="s">ต้องติดตามเพิ่มเติม</span>
           </div>
         </div>
+
+        <!-- Charts Section -->
+        <div class="dash-charts-row">
+          <!-- Monthly daily trend -->
+          <div class="dash-chart-panel dash-chart-trend">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-blue"></span>
+                <h3>แนวโน้มความเสียหายรายวัน</h3>
+              </div>
+              <p id="chartMonthlyLabel">เดือนนี้ — จำนวนเคสแต่ละวัน</p>
+            </div>
+            <div class="chart-canvas-wrap">
+              <canvas id="chartMonthly"></canvas>
+            </div>
+          </div>
+          <!-- Damage type donut -->
+          <div class="dash-chart-panel dash-chart-donut">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-amber"></span>
+                <h3>สัดส่วนประเภทความเสียหาย</h3>
+              </div>
+              <p>เปรียบเทียบสัดส่วนแต่ละประเภท</p>
+            </div>
+            <div class="chart-canvas-wrap donut-wrap">
+              <canvas id="chartDamageType"></canvas>
+            </div>
+          </div>
+          <!-- Detail stats -->
+          <div class="dash-chart-panel dash-chart-stats">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-green"></span>
+                <h3>วิเคราะห์รายละเอียด</h3>
+              </div>
+              <p>แยกตามกะ / บุ / หมวดหมู่ความเสียหาย</p>
+            </div>
+            <div id="detailStats" class="detail-stats"></div>
+          </div>
+        </div>
+
+        <div class="dash-analytics-grid">
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-green"></span>
+                <h3>Top BU ตามจำนวนเคส</h3>
+              </div>
+              <p>BU ที่ควรโฟกัสใน Weekly Review</p>
+            </div>
+            <div id="topBu" class="bar-list v2"></div>
+          </div>
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-amber"></span>
+                <h3>Top ประเภทสินค้า</h3>
+              </div>
+              <p>ชำรุด / แตกแพค / หมดอายุ</p>
+            </div>
+            <div id="topType" class="bar-list v2"></div>
+          </div>
+          <div class="dash-chart-panel dash-recent-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-blue"></span>
+                <h3>รายการล่าสุดในเงื่อนไขนี้</h3>
+              </div>
+              <p>ตรวจสอบรายการและเปิดรูปหลักฐาน</p>
+            </div>
+            <div id="dashboardRows" class="dash-recent-list"></div>
+          </div>
+        </div>
+
+        <!-- ====== COMPREHENSIVE ANALYSIS ====== -->
+        <div class="dash-section-divider"><span>📊 วิเคราะห์เชิงลึก</span></div>
+
+        <!-- Section 1: BU & Business Units -->
+        <div class="dash-section-divider" style="margin:26px 0 16px"><span style="color:#059669">🏢 วิเคราะห์รายหน่วยธุรกิจ (BU)</span></div>
+        <div class="dash-panel-row-2">
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-green"></span>
+                <h3>Top 5 BU ที่พบปัญหา</h3>
+                <span class="chip green" style="margin-left:auto">BU Cases</span>
+              </div>
+              <p>อันดับหน่วยธุรกิจตามจำนวนเคสเสียหายหลัก</p>
+            </div>
+            <div id="top5Bu" class="bar-list v2"></div>
+          </div>
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-green"></span>
+                <h3>มูลค่าความเสียหายตาม BU</h3>
+                <span class="chip green" style="margin-left:auto">BU Value</span>
+              </div>
+              <p>เปรียบเทียบมูลค่าความเสียหายรวมแยกตาม BU (บาท)</p>
+            </div>
+            <div id="valueBu" class="bar-list v2 v2-green"></div>
+          </div>
+        </div>
+
+        <!-- Section 2: Product & Damage Analysis -->
+        <div class="dash-section-divider" style="margin:26px 0 16px"><span style="color:#0284c7">📦 วิเคราะห์สินค้าและลักษณะความเสียหาย</span></div>
+        <div class="dash-panel-row-2">
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-blue"></span>
+                <h3>Top 5 สินค้าที่เกิดปัญหา</h3>
+                <span class="chip" style="margin-left:auto;background:#dbeafe;color:#1e40af">Top 5</span>
+              </div>
+              <p>จัดอันดับสินค้าเสียหายบ่อยตามจำนวนเคส</p>
+            </div>
+            <div id="top5Products" class="top5-list"></div>
+          </div>
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot" style="background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.18)"></span>
+                <h3>Top 5 ลักษณะความเสียหาย</h3>
+                <span class="chip" style="margin-left:auto;background:#fee2e2;color:#991b1b">Root Cause</span>
+              </div>
+              <p>ช่วยค้นหา Root Cause จากอาการที่พบซ้ำ</p>
+            </div>
+            <div id="top5RootCause" class="top5-list"></div>
+          </div>
+        </div>
+
+        <div class="dash-panel-row-2">
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-purple"></span>
+                <h3>Top 5 มูลค่าสูงสุดตามสินค้า</h3>
+                <span class="chip" style="margin-left:auto;background:#ede9fe;color:#5b21b6">Value Top 5</span>
+              </div>
+              <p>จัดอันดับสินค้าที่กระทบต้นทุนรวมสูงสุด (บาท)</p>
+            </div>
+            <div id="top5ProductsValue" class="top5-list"></div>
+          </div>
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-amber"></span>
+                <h3>Top 5 ประเภทสินค้า</h3>
+                <span class="chip amber" style="margin-left:auto">Type</span>
+              </div>
+              <p>ชำรุด / แตกแพค / หมดอายุ หรือประเภทที่กรอกเพิ่ม</p>
+            </div>
+            <div id="top5Types" class="bar-list v2 v2-amber"></div>
+          </div>
+        </div>
+
+        <div class="dash-panel-row-2" style="margin-bottom:14px">
+          <div class="dash-chart-panel" style="grid-column: span 2">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-amber"></span>
+                <h3>มูลค่าความเสียหายตามประเภทสินค้า</h3>
+                <span class="chip amber" style="margin-left:auto">Type Value</span>
+              </div>
+              <p>เปรียบเทียบมูลค่าความเสียหายรวม (ชำรุด / แตกแพค / หมดอายุ)</p>
+            </div>
+            <div id="valueType" class="bar-list v2 v2-amber"></div>
+          </div>
+        </div>
+
+        <!-- Section 3: Operations & Shift Analysis -->
+        <div class="dash-section-divider" style="margin:26px 0 16px"><span style="color:#2563eb">🕒 วิเคราะห์กะทำงานและการปฏิบัติงาน</span></div>
+        <div class="dash-chart-panel" style="margin-bottom:14px">
+          <div class="dash-panel-head">
+            <div class="dash-panel-title-row">
+              <span class="dash-panel-dot dot-blue"></span>
+              <h3>สัดส่วนเคสแยกตามกะ และกลุ่มเสียหาย</h3>
+              <span class="chip" style="margin-left:auto;background:#e0e7ff;color:#3730a3">Proportions</span>
+            </div>
+            <p>เปรียบเทียบสัดส่วนเปอร์เซ็นต์ระหว่าง กะทำงาน และกลุ่มความเสียหาย (OPT/SUP)</p>
+          </div>
+          <div class="treemap-split">
+            <div class="treemap-section">
+              <div class="treemap-sub-title">กะทำงาน</div>
+              <div class="treemap-wrap" id="treemapShift"></div>
+            </div>
+            <div class="treemap-section">
+              <div class="treemap-sub-title">กลุ่มความเสียหาย</div>
+              <div class="treemap-wrap" id="treemapGroup"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-panel-row-2">
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-blue"></span>
+                <h3>วิเคราะห์ตามกะ</h3>
+                <span class="chip" style="margin-left:auto;background:#dbeafe;color:#1e40af">Shift</span>
+              </div>
+              <p>แยกเฉพาะกะ A/B เท่านั้น ไม่รวมกับกลุ่มเสียหาย</p>
+            </div>
+            <div id="shiftCaseBars" class="bar-list v2 v2-blue"></div>
+          </div>
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-amber"></span>
+                <h3>วิเคราะห์หมู่เสียหาย</h3>
+                <span class="chip amber" style="margin-left:auto">Damage Group</span>
+              </div>
+              <p>แยกตามกลุ่ม OPT/SUP/อื่น ไม่รวมกับกะ</p>
+            </div>
+            <div id="groupCaseBars" class="bar-list v2 v2-amber"></div>
+          </div>
+        </div>
+
+        <div class="dash-panel-row-2">
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-blue"></span>
+                <h3>มูลค่าความเสียหายตามกะ</h3>
+                <span class="chip" style="margin-left:auto;background:#dbeafe;color:#1e40af">Shift Value</span>
+              </div>
+              <p>เปรียบเทียบมูลค่าความเสียหายรวม (บาท) ระหว่างกะ A และกะ B</p>
+            </div>
+            <div id="valueShift" class="bar-list v2 v2-blue"></div>
+          </div>
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-blue"></span>
+                <h3>กะ x ประเภทสินค้า</h3>
+                <span class="chip" style="margin-left:auto;background:#e0e7ff;color:#3730a3">Matrix Heatmap</span>
+              </div>
+              <p>ตาราง Heatmap ช่วยดูประเภทสินค้าที่เป็นปัญหาสูงสุดในแต่ละกะ</p>
+            </div>
+            <div class="matrix-wrap">
+              <table id="shiftMatrix" class="matrix-table"></table>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-chart-panel" style="margin-bottom:14px">
+          <div class="dash-panel-head">
+            <div class="dash-panel-title-row">
+              <span class="dash-panel-dot dot-blue"></span>
+              <h3>วิเคราะห์แยกตามกะเชิงลึก</h3>
+              <span class="chip" style="margin-left:auto;background:#e0e7ff;color:#3730a3">Shift Detail</span>
+            </div>
+            <p>จำนวนเคส จำนวนสินค้า BU หลัก ประเภทหลัก และสินค้า Top สูงสุดแต่ละกะ</p>
+          </div>
+          <div class="shift-detail-grid" id="shiftDetailCards"></div>
+          <div class="shift-top5-row">
+            <div>
+              <div class="shift-top5-header">กะ B &middot; Top 5 สินค้า</div>
+              <div id="shiftBTop5" class="top5-list"></div>
+            </div>
+            <div>
+              <div class="shift-top5-header">กะ A &middot; Top 5 สินค้า</div>
+              <div id="shiftATop5" class="top5-list"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 4: People & Data Quality -->
+        <div class="dash-section-divider" style="margin:26px 0 16px"><span style="color:#db2777">👥 วิเคราะห์บุคคลและคุณภาพข้อมูล</span></div>
+        <div class="dash-panel-row-2">
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot" style="background:#ec4899;box-shadow:0 0 0 3px rgba(236,72,153,.18)"></span>
+                <h3>Top 5 ผู้เกี่ยวข้อง / สังกัด</h3>
+                <span class="chip" style="margin-left:auto;background:#fce7f3;color:#9d174d">People</span>
+              </div>
+              <p>ดูภาพรวมสังกัดหรือผู้เกี่ยวข้องเพื่อหาทางป้องกัน ไม่ใช่เพื่อเพ่งเล็งบุคคล</p>
+            </div>
+            <div id="top5Actors" class="top5-list"></div>
+          </div>
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-green"></span>
+                <h3>มูลค่าความเสียหายตามสังกัด</h3>
+                <span class="chip" style="margin-left:auto;background:#dcfce7;color:#166534">Affiliation Value</span>
+              </div>
+              <p>เปรียบเทียบตามสังกัด (PTG / Man Power / 40HRS / BU)</p>
+            </div>
+            <div id="valueAffiliation" class="bar-list v2 v2-green"></div>
+          </div>
+        </div>
+
+        <div class="dash-panel-row-2" style="margin-bottom:0">
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-purple"></span>
+                <h3>มูลค่าความเสียหายตามกลุ่มบัญชี</h3>
+                <span class="chip" style="margin-left:auto;background:#ede9fe;color:#5b21b6">Account Value</span>
+              </div>
+              <p>รายงานสินค้าทางบัญชี (รอทำลายได้ / รอทำลายไม่ได้)</p>
+            </div>
+            <div id="valueAccount" class="bar-list v2 v2-purple"></div>
+          </div>
+          <div class="dash-chart-panel">
+            <div class="dash-panel-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-green"></span>
+                <h3>คุณภาพข้อมูลและรูปภาพ</h3>
+                <span class="chip green" style="margin-left:auto">Data Quality</span>
+              </div>
+              <p>ความครบถ้วนของหลักฐานสำคัญสำหรับตรวจสอบย้อนหลัง</p>
+            </div>
+            <div id="qualityAlerts" class="quality-alerts"></div>
+          </div>
+        </div>
+
       </section>
     </section>
   </main>
 
-  <div id="loading" class="loading hidden"><div class="spinner"></div><span>กำลังประมวลผล...</span></div>
+  <div id="loading" class="loading hidden">
+    <div class="loader-card">
+      <div class="spinner"></div>
+      <div class="loader-text-group">
+        <span class="loader-title">กำลังประมวลผล</span>
+        <span class="loader-desc">กรุณารอสักครู่ ระบบกำลังสื่อสารกับเซิร์ฟเวอร์</span>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
 
   <script src="script.js"></script>
