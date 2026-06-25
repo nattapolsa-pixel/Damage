@@ -53,6 +53,8 @@ const state = {
   loadingCount: 0
 };
 
+const BLANK_GIF = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
 const $ = (id) => document.getElementById(id);
 
 window.addEventListener('DOMContentLoaded', initApp);
@@ -296,7 +298,7 @@ function bindImages() {
       const file = input.files && input.files[0];
       if (!file) {
         state.images[inputId] = '';
-        preview.removeAttribute('src');
+        preview.src = BLANK_GIF;
         preview.parentElement.classList.remove('has-image');
         return;
       }
@@ -370,6 +372,11 @@ function bindDashboard() {
 
   if ($('btnExportDashboardImg')) $('btnExportDashboardImg').addEventListener('click', exportFullDashboardImage);
   if ($('btnExportDashboardPdf')) $('btnExportDashboardPdf').addEventListener('click', exportDashboardToPDF);
+  if ($('btnExportDashboardPrint')) {
+    $('btnExportDashboardPrint').addEventListener('click', () => {
+      window.print();
+    });
+  }
   if ($('btnExportDashboardExcel')) {
     $('btnExportDashboardExcel').addEventListener('click', () => {
       const bu = val('dashBu') || 'ทั้งหมด';
@@ -835,7 +842,7 @@ async function hydrateOneImageThumb(img) {
       const text = box.querySelector('span');
       if (text) text.textContent = 'เปิดรูป';
     }
-    img.removeAttribute('src');
+    img.src = BLANK_GIF;
     img.alt = label;
   }
 }
@@ -1629,7 +1636,7 @@ function setExistingImagePreview(previewId, image) {
   const preview = $(previewId);
   const url = image && (image.previewUrl || image.url);
   if (!url) {
-    preview.removeAttribute('src');
+    preview.src = BLANK_GIF;
     preview.parentElement.classList.remove('has-image');
     return;
   }
@@ -1753,7 +1760,7 @@ function resetForm(keepToast) {
   state.images = { imageBarcode: '', imageProduct: '', imageExpiry: '' };
   ['previewBarcode', 'previewProduct', 'previewExpiry'].forEach((id) => {
     const img = $(id);
-    img.removeAttribute('src');
+    img.src = BLANK_GIF;
     img.parentElement.classList.remove('has-image');
   });
   $('productResults').classList.add('hidden');
@@ -2351,6 +2358,116 @@ function exportToExcel(records, baseFilename) {
   }
 }
 
+function html2canvasWithCanvasFix(element, options = {}) {
+  const canvases = document.querySelectorAll('canvas');
+  const svgs = document.querySelectorAll('svg');
+  
+  const replacements = [];
+  const svgReplacements = [];
+
+  // 1. Substitute Canvas elements with static images
+  try {
+    canvases.forEach(canvas => {
+      const parent = canvas.parentNode;
+      const nextSibling = canvas.nextSibling;
+      
+      if (parent) {
+        if (canvas.width > 0 && canvas.height > 0) {
+          try {
+            const img = document.createElement('img');
+            img.src = canvas.toDataURL('image/png');
+            img.style.width = canvas.style.width || (canvas.width + 'px');
+            img.style.height = canvas.style.height || (canvas.height + 'px');
+            img.style.display = canvas.style.display || 'block';
+            img.className = canvas.className;
+            
+            parent.insertBefore(img, canvas);
+            parent.removeChild(canvas);
+            replacements.push({ canvas, img, parent, nextSibling });
+          } catch (e) {
+            parent.removeChild(canvas);
+            replacements.push({ canvas, img: null, parent, nextSibling });
+          }
+        } else {
+          // Remove 0x0 size canvas to prevent html2canvas clone crash
+          parent.removeChild(canvas);
+          replacements.push({ canvas, img: null, parent, nextSibling });
+        }
+      }
+    });
+  } catch (e) {
+    console.warn('Failed to substitute canvases with images:', e);
+  }
+
+  // 2. Add temporary width and height attributes to SVG elements lacking them
+  try {
+    svgs.forEach(svg => {
+      const rect = svg.getBoundingClientRect();
+      const w = rect.width || 100;
+      const h = rect.height || 100;
+      
+      const hasWidth = svg.hasAttribute('width');
+      const hasHeight = svg.hasAttribute('height');
+      
+      if (!hasWidth || !hasHeight) {
+        const originalWidth = svg.getAttribute('width');
+        const originalHeight = svg.getAttribute('height');
+        
+        svg.setAttribute('width', hasWidth ? originalWidth : String(w));
+        svg.setAttribute('height', hasHeight ? originalHeight : String(h));
+        
+        svgReplacements.push({
+          svg,
+          originalWidth,
+          originalHeight,
+          hadWidth: hasWidth,
+          hadHeight: hasHeight
+        });
+      }
+    });
+  } catch (e) {
+    console.warn('Failed to fix SVGs for html2canvas:', e);
+  }
+
+  const cleanUp = () => {
+    // Restore canvases
+    replacements.forEach(({ canvas, img, parent, nextSibling }) => {
+      if (img && img.parentNode === parent) {
+        parent.insertBefore(canvas, img);
+        parent.removeChild(img);
+      } else if (!img && parent) {
+        if (nextSibling && nextSibling.parentNode === parent) {
+          parent.insertBefore(canvas, nextSibling);
+        } else {
+          parent.appendChild(canvas);
+        }
+      }
+    });
+
+    // Restore SVG attributes
+    svgReplacements.forEach(({ svg, originalWidth, originalHeight, hadWidth, hadHeight }) => {
+      if (!hadWidth) {
+        svg.removeAttribute('width');
+      } else {
+        svg.setAttribute('width', originalWidth);
+      }
+      if (!hadHeight) {
+        svg.removeAttribute('height');
+      } else {
+        svg.setAttribute('height', originalHeight);
+      }
+    });
+  };
+
+  return html2canvas(element, options).then(resultCanvas => {
+    cleanUp();
+    return resultCanvas;
+  }).catch(err => {
+    cleanUp();
+    throw err;
+  });
+}
+
 function exportSectionToImage(elementId, filenamePrefix) {
   try {
     if (typeof html2canvas === 'undefined') {
@@ -2368,7 +2485,7 @@ function exportSectionToImage(elementId, filenamePrefix) {
     
     // Wait short delay for layout to settle
     setTimeout(() => {
-      html2canvas(el, {
+      html2canvasWithCanvasFix(el, {
         scale: 2, // High resolution
         useCORS: true,
         backgroundColor: '#f8fafc',
@@ -2389,12 +2506,12 @@ function exportSectionToImage(elementId, filenamePrefix) {
         toast(`บันทึกรูปสำเร็จ: ${filename}`, 'ok');
       }).catch(err => {
         loading(false);
-        alert('เกิดข้อผิดพลาดในการจับภาพ Canvas: ' + err.message);
+        alert('เกิดข้อผิดพลาดในการจับภาพ Canvas: ' + err.message + '\n\n' + err.stack);
       });
     }, 100);
   } catch (err) {
     loading(false);
-    alert('เกิดข้อผิดพลาดในการจับภาพ: ' + err.message);
+    alert('เกิดข้อผิดพลาดในการจับภาพ: ' + err.message + '\n\n' + err.stack);
   }
 }
 
@@ -2425,7 +2542,7 @@ function exportFullDashboardImage() {
     loading(true);
     
     setTimeout(() => {
-      html2canvas(page, {
+      html2canvasWithCanvasFix(page, {
         scale: 1.5,
         useCORS: true,
         backgroundColor: '#f8fafc',
@@ -2456,12 +2573,12 @@ function exportFullDashboardImage() {
         captureBtns.forEach(btn => btn.style.display = '');
         
         loading(false);
-        alert('เกิดข้อผิดพลาดในการเซฟภาพ Dashboard: ' + err.message);
+        alert('เกิดข้อผิดพลาดในการเซฟภาพ Dashboard: ' + err.message + '\n\n' + err.stack);
       });
     }, 150);
   } catch (err) {
     loading(false);
-    alert('เกิดข้อผิดพลาดในการบันทึกภาพแดชบอร์ด: ' + err.message);
+    alert('เกิดข้อผิดพลาดในการบันทึกภาพแดชบอร์ด: ' + err.message + '\n\n' + err.stack);
   }
 }
 
@@ -2508,7 +2625,7 @@ async function exportDashboardToPDF() {
       const section = activeSections[i];
       const el = $(section.id);
       
-      const canvas = await html2canvas(el, {
+      const canvas = await html2canvasWithCanvasFix(el, {
         scale: 1.5,
         useCORS: true,
         backgroundColor: '#f8fafc',
