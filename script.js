@@ -326,20 +326,21 @@ function bindFormEnhancements() {
 async function scanBarcodeFromFile(file) {
   const objectUrl = URL.createObjectURL(file);
   try {
-    // 1. Try native BarcodeDetector if supported
+    // Load the image in memory
+    const img = new Image();
+    img.src = objectUrl;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('โหลดรูปภาพล้มเหลว'));
+    });
+
+    // 1. Try native BarcodeDetector if supported (excluding QR codes to avoid conflicts)
     if ('BarcodeDetector' in window) {
       try {
         const formats = await BarcodeDetector.getSupportedFormats();
-        if (formats.includes('ean_13')) {
-          const detector = new BarcodeDetector({
-            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'qr_code']
-          });
-          const img = new Image();
-          img.src = objectUrl;
-          await new Promise((resolve, reject) => {
-            img.onload = resolve;
-            img.onerror = () => reject(new Error('โหลดรูปภาพล้มเหลว'));
-          });
+        const desiredFormats = ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e'].filter(f => formats.includes(f));
+        if (desiredFormats.length > 0) {
+          const detector = new BarcodeDetector({ formats: desiredFormats });
           const barcodes = await detector.detect(img);
           if (barcodes && barcodes.length > 0) {
             return barcodes[0].rawValue;
@@ -361,17 +362,39 @@ async function scanBarcodeFromFile(file) {
       ZXing.BarcodeFormat.CODE_128,
       ZXing.BarcodeFormat.CODE_39,
       ZXing.BarcodeFormat.UPC_A,
-      ZXing.BarcodeFormat.UPC_E,
-      ZXing.BarcodeFormat.QR_CODE
+      ZXing.BarcodeFormat.UPC_E
     ];
     hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
 
     const codeReader = new ZXing.BrowserMultiFormatReader(hints);
-    const result = await codeReader.decodeFromImageUrl(objectUrl);
-    if (result) {
-      return result.getText();
+
+    // Multi-pass resolution approach for high-res images
+    const targetDimensions = [1200, 800];
+    for (const maxDim of targetDimensions) {
+      try {
+        if (Math.max(img.width, img.height) > maxDim) {
+          const canvas = resizeImageToCanvas(img, maxDim);
+          const result = await codeReader.decodeFromCanvas(canvas);
+          if (result) {
+            return result.getText();
+          }
+        }
+      } catch (err) {
+        console.warn(`Decoding failed at resolution ${maxDim}px:`, err);
+      }
     }
+
+    // Last try: Raw image element directly
+    try {
+      const result = await codeReader.decodeFromImageElement(img);
+      if (result) {
+        return result.getText();
+      }
+    } catch (err) {
+      console.warn('Decoding failed on raw image element:', err);
+    }
+
     throw new Error('ไม่พบข้อมูลบาร์โค้ดในภาพนี้');
   } catch (err) {
     console.warn('Barcode scanning failed:', err);
@@ -379,6 +402,19 @@ async function scanBarcodeFromFile(file) {
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+}
+
+function resizeImageToCanvas(img, maxDimension) {
+  const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+  const width = Math.round(img.width * scale);
+  const height = Math.round(img.height * scale);
+  
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, width, height);
+  return canvas;
 }
 
 async function searchProductAfterScan(scannedBarcode) {
