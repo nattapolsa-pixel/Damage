@@ -429,7 +429,7 @@ async function scanBarcodeFromFile(file) {
     throw new Error('ไม่พบข้อมูลบาร์โค้ดในภาพนี้');
   } catch (err) {
     console.warn('Barcode scanning failed:', err);
-    throw new Error('ไม่สามารถอ่านบาร์โค้ดจากภาพนี้ได้ กรุณาใช้รูปที่เห็นแถบบาร์โค้ดชัดเจน ไม่มีเงาบัง หรือกรอกเลขด้วยตนเอง');
+    throw new Error('ไม่สามารถอ่านบาร์โค้ดจากภาพนี้ได้: ' + (err.message || 'ตรวจไม่พบแถบบาร์โค้ด EAN-13'));
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
