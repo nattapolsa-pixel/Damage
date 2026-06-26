@@ -277,10 +277,22 @@ function bindFormEnhancements() {
     });
   });
   if (barcodeFile) {
-    barcodeFile.addEventListener('change', () => {
+    barcodeFile.addEventListener('change', async () => {
       const file = barcodeFile.files && barcodeFile.files[0];
-      if (file) toast('เลือกรูปบาร์โค้ดแล้ว หากอ่านไม่ได้ให้กรอกเลขบาร์โค้ดเอง', 'warn');
-      barcodeFile.value = '';
+      if (!file) return;
+      try {
+        loading(true);
+        toast('กำลังประมวลผลรูปภาพและอ่านบาร์โค้ด...', 'info');
+        const code = await scanBarcodeFromFile(file);
+        if (code) {
+          await searchProductAfterScan(code);
+        }
+      } catch (err) {
+        toast(err.message || 'ไม่สามารถสแกนบาร์โค้ดได้', 'bad');
+      } finally {
+        barcodeFile.value = '';
+        loading(false);
+      }
     });
   }
 
@@ -309,6 +321,96 @@ function bindFormEnhancements() {
     el.addEventListener('input', updateSummary);
     el.addEventListener('change', updateSummary);
   });
+}
+
+async function scanBarcodeFromFile(file) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    // 1. Try native BarcodeDetector if supported
+    if ('BarcodeDetector' in window) {
+      try {
+        const formats = await BarcodeDetector.getSupportedFormats();
+        if (formats.includes('ean_13')) {
+          const detector = new BarcodeDetector({
+            formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'qr_code']
+          });
+          const img = new Image();
+          img.src = objectUrl;
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = () => reject(new Error('โหลดรูปภาพล้มเหลว'));
+          });
+          const barcodes = await detector.detect(img);
+          if (barcodes && barcodes.length > 0) {
+            return barcodes[0].rawValue;
+          }
+        }
+      } catch (err) {
+        console.warn('Native BarcodeDetector failed, trying ZXing:', err);
+      }
+    }
+
+    // 2. Fallback to ZXing MultiFormatReader
+    if (typeof ZXing === 'undefined') {
+      throw new Error('ระบบสแกนสำรอง (ZXing) ยังไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง');
+    }
+    const hints = new Map();
+    const formats = [
+      ZXing.BarcodeFormat.EAN_13,
+      ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.UPC_A,
+      ZXing.BarcodeFormat.UPC_E,
+      ZXing.BarcodeFormat.QR_CODE
+    ];
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
+    const codeReader = new ZXing.BrowserMultiFormatReader(hints);
+    const result = await codeReader.decodeFromImageUrl(objectUrl);
+    if (result) {
+      return result.getText();
+    }
+    throw new Error('ไม่พบข้อมูลบาร์โค้ดในภาพนี้');
+  } catch (err) {
+    console.warn('Barcode scanning failed:', err);
+    throw new Error('ไม่สามารถอ่านบาร์โค้ดจากภาพนี้ได้ กรุณาใช้รูปที่เห็นแถบบาร์โค้ดชัดเจน ไม่มีเงาบัง หรือกรอกเลขด้วยตนเอง');
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function searchProductAfterScan(scannedBarcode) {
+  setValue('barcode', scannedBarcode);
+  const barcodeEl = $('barcode');
+  barcodeEl.dispatchEvent(new Event('input', { bubbles: true }));
+  barcodeEl.dispatchEvent(new Event('change', { bubbles: true }));
+
+  if (!hasApiConfigured()) {
+    toast(`อ่านบาร์โค้ดได้เลข: ${scannedBarcode}`, 'ok');
+    return;
+  }
+
+  try {
+    loading(true);
+    const res = await apiGet('findProducts', { query: scannedBarcode });
+    const data = unwrapApi(res);
+    const products = data.products || [];
+    if (products.length === 1) {
+      applyProduct(products[0]);
+      toast(`สแกนพบสินค้า: ${products[0].itemName}`, 'ok');
+    } else if (products.length > 1) {
+      renderProductResults(products);
+      toast(`พบสินค้า ${products.length} รายการ กรุณาเลือกรายการที่ถูกต้อง`, 'info');
+    } else {
+      toast(`สแกนได้เลข ${scannedBarcode} แต่ไม่พบสินค้านี้ในระบบ`, 'warn');
+    }
+  } catch (err) {
+    toast(`สแกนได้เลข ${scannedBarcode} แต่ค้นหาล้มเหลว: ` + err.message, 'warn');
+  } finally {
+    loading(false);
+  }
 }
 
 function bindImages() {
