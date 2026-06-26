@@ -60,6 +60,9 @@ const $ = (id) => document.getElementById(id);
 window.addEventListener('DOMContentLoaded', initApp);
 
 async function initApp() {
+  if ($('debugVersion')) {
+    $('debugVersion').textContent = '(Scanner: v2.2 - Active)';
+  }
   bindTabs();
   bindForm();
   bindImages();
