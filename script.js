@@ -334,27 +334,33 @@ async function scanBarcodeFromFile(file) {
       img.onerror = () => reject(new Error('โหลดรูปภาพล้มเหลว'));
     });
 
-    // 1. Try native BarcodeDetector if supported (excluding QR codes to avoid conflicts)
-    if ('BarcodeDetector' in window) {
-      try {
-        const formats = await BarcodeDetector.getSupportedFormats();
-        const desiredFormats = ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e'].filter(f => formats.includes(f));
-        if (desiredFormats.length > 0) {
-          const detector = new BarcodeDetector({ formats: desiredFormats });
-          const barcodes = await detector.detect(img);
-          if (barcodes && barcodes.length > 0) {
-            return barcodes[0].rawValue;
+    // Helper to run native BarcodeDetector if supported
+    const tryNativeDetector = async (source) => {
+      if ('BarcodeDetector' in window) {
+        try {
+          const formats = await BarcodeDetector.getSupportedFormats();
+          const desiredFormats = ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e'].filter(f => formats.includes(f));
+          if (desiredFormats.length > 0) {
+            const detector = new BarcodeDetector({ formats: desiredFormats });
+            const barcodes = await detector.detect(source);
+            if (barcodes && barcodes.length > 0) {
+              return barcodes[0].rawValue;
+            }
           }
+        } catch (err) {
+          console.warn('Native BarcodeDetector pass failed:', err);
         }
-      } catch (err) {
-        console.warn('Native BarcodeDetector failed, trying ZXing:', err);
       }
-    }
+      return null;
+    };
 
     // 2. Fallback to ZXing MultiFormatReader
     if (typeof ZXing === 'undefined') {
+      const nativeCode = await tryNativeDetector(img);
+      if (nativeCode) return nativeCode;
       throw new Error('ระบบสแกนสำรอง (ZXing) ยังไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง');
     }
+
     const hints = new Map();
     const formats = [
       ZXing.BarcodeFormat.EAN_13,
@@ -369,30 +375,55 @@ async function scanBarcodeFromFile(file) {
 
     const codeReader = new ZXing.BrowserMultiFormatReader(hints);
 
-    // Multi-pass resolution approach for high-res images
-    const targetDimensions = [1200, 800];
-    for (const maxDim of targetDimensions) {
+    // Multi-pass approach using both engines with different image resolutions & enhancement filters
+    const passes = [
+      // Pass 1: Raw image element (original size, no filters)
+      { useElement: true },
+      
+      // Pass 2: Moderately scaled down (1200px) - helps smooth noise and local glare
+      { maxDim: 1200 },
+      
+      // Pass 3: Grayscale + high contrast + slightly darker (helps wash out glare on glossy cardboard)
+      { maxDim: 1200, filter: 'contrast(1.6) brightness(0.85) grayscale(1)' },
+      
+      // Pass 4: Smaller scale (800px)
+      { maxDim: 800 },
+      
+      // Pass 5: Smaller scale + grayscale + high contrast
+      { maxDim: 800, filter: 'contrast(1.5) grayscale(1)' },
+      
+      // Pass 6: Original size + high contrast + slightly darker
+      { useElement: false, filter: 'contrast(1.5) brightness(0.9) grayscale(1)' }
+    ];
+
+    for (const pass of passes) {
       try {
-        if (Math.max(img.width, img.height) > maxDim) {
-          const canvas = resizeImageToCanvas(img, maxDim);
+        if (pass.useElement) {
+          // 1. Try Native Detector on raw image
+          const nativeCode = await tryNativeDetector(img);
+          if (nativeCode) return nativeCode;
+
+          // 2. Try ZXing on raw image
+          const result = await codeReader.decodeFromImageElement(img);
+          if (result) return result.getText();
+        } else {
+          // Draw to canvas with optional resize and enhancement filter
+          const maxDim = pass.maxDim || Math.max(img.width, img.height);
+          const canvas = resizeImageToCanvas(img, maxDim, pass.filter);
+
+          // 1. Try Native Detector on enhanced canvas
+          const nativeCode = await tryNativeDetector(canvas);
+          if (nativeCode) return nativeCode;
+
+          // 2. Try ZXing on enhanced canvas
           const result = await codeReader.decodeFromCanvas(canvas);
-          if (result) {
-            return result.getText();
-          }
+          if (result) return result.getText();
         }
       } catch (err) {
-        console.warn(`Decoding failed at resolution ${maxDim}px:`, err);
+        const filterName = pass.filter ? ` with filter [${pass.filter}]` : '';
+        const sizeName = pass.maxDim ? ` at size ${pass.maxDim}px` : ' at original size';
+        console.warn(`Pass failed${sizeName}${filterName}:`, err);
       }
-    }
-
-    // Last try: Raw image element directly
-    try {
-      const result = await codeReader.decodeFromImageElement(img);
-      if (result) {
-        return result.getText();
-      }
-    } catch (err) {
-      console.warn('Decoding failed on raw image element:', err);
     }
 
     throw new Error('ไม่พบข้อมูลบาร์โค้ดในภาพนี้');
@@ -404,7 +435,7 @@ async function scanBarcodeFromFile(file) {
   }
 }
 
-function resizeImageToCanvas(img, maxDimension) {
+function resizeImageToCanvas(img, maxDimension, filter) {
   const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
   const width = Math.round(img.width * scale);
   const height = Math.round(img.height * scale);
@@ -413,6 +444,11 @@ function resizeImageToCanvas(img, maxDimension) {
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
+  
+  if (filter) {
+    ctx.filter = filter;
+  }
+  
   ctx.drawImage(img, 0, 0, width, height);
   return canvas;
 }
