@@ -61,7 +61,7 @@ window.addEventListener('DOMContentLoaded', initApp);
 
 async function initApp() {
   if ($('debugVersion')) {
-    $('debugVersion').textContent = '(Scanner: v2.3 - Active)';
+    $('debugVersion').textContent = '(Scanner: v2.4 - Working ZXing flow)';
   }
   bindTabs();
   bindForm();
@@ -276,7 +276,10 @@ function bindFormEnhancements() {
   const scanButtons = [$('btnScanBarcode'), $('mobileScanButton')].filter(Boolean);
   scanButtons.forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (barcodeFile) barcodeFile.click();
+      if (barcodeFile) {
+        barcodeFile.value = '';
+        barcodeFile.click();
+      }
     });
   });
   if (barcodeFile) {
@@ -285,12 +288,15 @@ function bindFormEnhancements() {
       if (!file) return;
       try {
         loading(true);
+        setScanHint('กำลังอ่าน Barcode จากรูป...', '');
         toast('กำลังประมวลผลรูปภาพและอ่านบาร์โค้ด...', 'info');
         const code = await scanBarcodeFromFile(file);
         if (code) {
+          setScanHint('อ่าน Barcode ได้: ' + code, 'good');
           await searchProductAfterScan(code);
         }
       } catch (err) {
+        setScanHint(err.message || 'อ่าน Barcode ไม่สำเร็จ ลองถ่ายให้ Barcode ชัด เต็มกรอบ และไม่เอียงมาก', 'warn');
         toast(err.message || 'ไม่สามารถสแกนบาร์โค้ดได้', 'bad');
       } finally {
         barcodeFile.value = '';
@@ -327,311 +333,168 @@ function bindFormEnhancements() {
 }
 
 async function scanBarcodeFromFile(file) {
-  const objectUrl = URL.createObjectURL(file);
-  try {
-    const img = await loadImageElement(objectUrl);
-    const nativeDetector = await createNativeBarcodeDetector();
+  const native = await scanWithNativeBarcodeDetector(file);
+  if (native) return native;
 
-    const nativeCode = await detectBarcodeNative(nativeDetector, img);
-    if (nativeCode) return nativeCode;
+  const zxing = await scanWithZxing(file);
+  if (zxing) return zxing;
 
-    const scanner = createZxingScanner();
-    if (!scanner) {
-      throw new Error('ระบบสแกนสำรอง (ZXing) ยังไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง');
-    }
+  const variants = await buildBarcodeImageVariants(file);
+  for (const variant of variants) {
+    const nativeTry = await scanWithNativeBarcodeDetector(variant);
+    if (nativeTry) return nativeTry;
 
-    const rawZxingCode = await decodeImageWithZxing(scanner, img);
-    if (rawZxingCode) return rawZxingCode;
-
-    const scanCanvases = buildBarcodeScanCanvases(img);
-    for (const item of scanCanvases) {
-      try {
-        const codeFromNative = await detectBarcodeNative(nativeDetector, item.canvas);
-        if (codeFromNative) return codeFromNative;
-
-        const codeFromZxing = await decodeCanvasWithZxing(scanner, item.canvas);
-        if (codeFromZxing) return codeFromZxing;
-      } catch (err) {
-        console.warn('Barcode pass failed:', item.name, err);
-      }
-    }
-
-    throw new Error('ไม่พบข้อมูลบาร์โค้ดในภาพนี้');
-  } catch (err) {
-    console.warn('Barcode scanning failed:', err);
-    throw new Error('ไม่สามารถอ่านบาร์โค้ดจากภาพนี้ได้ กรุณาถ่ายให้เห็นแถบบาร์โค้ดเต็ม ๆ ชัด ๆ หรือกรอกเลขเอง');
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
-}
-
-function loadImageElement(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('โหลดรูปภาพล้มเหลว'));
-    img.src = src;
-  });
-}
-
-async function createNativeBarcodeDetector() {
-  if (!('BarcodeDetector' in window)) return null;
-  try {
-    const requested = ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e'];
-    let formats = requested;
-    if (typeof window.BarcodeDetector.getSupportedFormats === 'function') {
-      const supported = await window.BarcodeDetector.getSupportedFormats();
-      formats = requested.filter((format) => supported.includes(format));
-    }
-    return formats.length ? new window.BarcodeDetector({ formats }) : null;
-  } catch (err) {
-    console.warn('Native BarcodeDetector is unavailable:', err);
-    return null;
-  }
-}
-
-async function detectBarcodeNative(detector, source) {
-  if (!detector || !source) return '';
-  try {
-    const barcodes = await detector.detect(source);
-    return (barcodes || [])
-      .map((barcode) => normalizeScannedBarcode(barcode.rawValue))
-      .find(Boolean) || '';
-  } catch (err) {
-    console.warn('Native BarcodeDetector pass failed:', err);
-    return '';
-  }
-}
-
-function createZxingScanner() {
-  if (typeof ZXing === 'undefined') return null;
-
-  const hints = new Map();
-  const formats = [
-    ZXing.BarcodeFormat && ZXing.BarcodeFormat.EAN_13,
-    ZXing.BarcodeFormat && ZXing.BarcodeFormat.EAN_8,
-    ZXing.BarcodeFormat && ZXing.BarcodeFormat.CODE_128,
-    ZXing.BarcodeFormat && ZXing.BarcodeFormat.CODE_39,
-    ZXing.BarcodeFormat && ZXing.BarcodeFormat.UPC_A,
-    ZXing.BarcodeFormat && ZXing.BarcodeFormat.UPC_E
-  ].filter(Boolean);
-
-  if (ZXing.DecodeHintType && ZXing.DecodeHintType.POSSIBLE_FORMATS && formats.length) {
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
-  }
-  if (ZXing.DecodeHintType && ZXing.DecodeHintType.TRY_HARDER) {
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const zxingTry = await scanWithZxing(variant);
+    if (zxingTry) return zxingTry;
   }
 
-  const browserReader = ZXing.BrowserMultiFormatReader
-    ? new ZXing.BrowserMultiFormatReader(hints)
-    : null;
-  let multiReader = null;
-  if (ZXing.MultiFormatReader) {
-    multiReader = new ZXing.MultiFormatReader();
-    if (typeof multiReader.setHints === 'function') multiReader.setHints(hints);
-  }
-
-  return { hints, browserReader, multiReader };
-}
-
-async function decodeImageWithZxing(scanner, img) {
-  if (!scanner || !scanner.browserReader || typeof scanner.browserReader.decodeFromImageElement !== 'function') {
-    return '';
-  }
-  try {
-    const result = await scanner.browserReader.decodeFromImageElement(img);
-    return normalizeScannedBarcode(getZxingText(result));
-  } catch (err) {
-    console.warn('ZXing raw image pass failed:', err);
-    return '';
-  }
-}
-
-async function decodeCanvasWithZxing(scanner, canvas) {
-  if (!scanner || !canvas) return '';
-
-  if (scanner.browserReader && typeof scanner.browserReader.decodeFromCanvas === 'function') {
-    try {
-      const result = await scanner.browserReader.decodeFromCanvas(canvas);
-      const code = normalizeScannedBarcode(getZxingText(result));
-      if (code) return code;
-    } catch (err) {
-      console.warn('ZXing canvas browser pass failed:', err);
-    }
-  }
-
-  const directCode = decodeCanvasWithZxingCore(scanner, canvas);
-  if (directCode) return directCode;
-
-  if (scanner.browserReader && typeof scanner.browserReader.decodeFromImageUrl === 'function') {
-    try {
-      const result = await scanner.browserReader.decodeFromImageUrl(canvas.toDataURL('image/png'));
-      return normalizeScannedBarcode(getZxingText(result));
-    } catch (err) {
-      console.warn('ZXing canvas data-url pass failed:', err);
-    }
-  }
-
-  return '';
-}
-
-function decodeCanvasWithZxingCore(scanner, canvas) {
-  if (
-    !scanner.multiReader ||
-    !ZXing.HTMLCanvasElementLuminanceSource ||
-    !ZXing.BinaryBitmap
-  ) {
-    return '';
-  }
-
-  const binarizers = [
-    ZXing.HybridBinarizer,
-    ZXing.GlobalHistogramBinarizer
-  ].filter(Boolean);
-
-  for (const Binarizer of binarizers) {
-    try {
-      const source = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
-      const bitmap = new ZXing.BinaryBitmap(new Binarizer(source));
-      const result = typeof scanner.multiReader.decodeWithState === 'function'
-        ? scanner.multiReader.decodeWithState(bitmap)
-        : scanner.multiReader.decode(bitmap);
-      const code = normalizeScannedBarcode(getZxingText(result));
-      if (code) return code;
-    } catch (err) {
-      console.warn('ZXing core pass failed:', err);
-    } finally {
-      if (typeof scanner.multiReader.reset === 'function') scanner.multiReader.reset();
-    }
-  }
-
-  return '';
-}
-
-function getZxingText(result) {
-  if (!result) return '';
-  if (typeof result.getText === 'function') return result.getText();
-  return result.text || result.rawValue || '';
+  throw new Error('อ่าน Barcode ไม่สำเร็จ ลองถ่ายให้ Barcode ชัด เต็มกรอบ และไม่เอียงมาก');
 }
 
 function normalizeScannedBarcode(value) {
-  const compact = String(value || '')
-    .trim()
-    .replace(/[\s\r\n\t]+/g, '')
-    .replace(/[‐‑‒–—―-]+/g, '');
-  if (!compact) return '';
-
-  const digits = compact.replace(/\D/g, '');
-  if (digits.length >= 8 && digits.length <= 14) return digits;
-  return compact.length >= 4 ? compact : '';
+  const text = String(value || '').trim().replace(/[\s\-]/g, '');
+  if (/^[0-9A-Za-z]{4,40}$/.test(text)) return text;
+  return '';
 }
 
-function buildBarcodeScanCanvases(img) {
-  const sourceWidth = img.naturalWidth || img.width;
-  const sourceHeight = img.naturalHeight || img.height;
-  const crops = {
-    full: { x: 0, y: 0, width: sourceWidth, height: sourceHeight },
-    middle: pctCrop(sourceWidth, sourceHeight, 0.04, 0.22, 0.92, 0.54),
-    lowerWide: pctCrop(sourceWidth, sourceHeight, 0.02, 0.36, 0.96, 0.58),
-    lowerMiddle: pctCrop(sourceWidth, sourceHeight, 0.06, 0.47, 0.88, 0.42),
-    barcodeBand: pctCrop(sourceWidth, sourceHeight, 0.10, 0.54, 0.80, 0.32)
-  };
+async function scanWithNativeBarcodeDetector(file) {
+  if (!('BarcodeDetector' in window) || typeof createImageBitmap === 'undefined') return '';
+  let bitmap = null;
+  try {
+    const detector = new BarcodeDetector({
+      formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'itf']
+    });
+    bitmap = await createImageBitmap(file);
+    const codes = await detector.detect(bitmap);
+    return normalizeScannedBarcode(codes && codes[0] && codes[0].rawValue);
+  } catch (err) {
+    return '';
+  } finally {
+    try {
+      if (bitmap && bitmap.close) bitmap.close();
+    } catch (err) {}
+  }
+}
 
-  const passes = [
-    { name: 'เต็มภาพ', crop: crops.full, maxWidth: 1800, maxHeight: 1800 },
-    { name: 'เต็มภาพคอนทราสต์', crop: crops.full, maxWidth: 1800, maxHeight: 1800, filter: 'grayscale(1) contrast(1.7) brightness(0.95)' },
-    { name: 'กลางภาพ', crop: crops.middle, maxWidth: 2200, maxHeight: 1500 },
-    { name: 'ครึ่งล่าง', crop: crops.lowerWide, maxWidth: 2400, maxHeight: 1500 },
-    { name: 'ครึ่งล่างคอนทราสต์', crop: crops.lowerWide, maxWidth: 2400, maxHeight: 1500, filter: 'grayscale(1) contrast(2) brightness(0.9)' },
-    { name: 'ช่วงเลขบาร์โค้ด', crop: crops.lowerMiddle, maxWidth: 2400, maxHeight: 1200 },
-    { name: 'ช่วงเลขบาร์โค้ดเข้ม', crop: crops.lowerMiddle, maxWidth: 2400, maxHeight: 1200, filter: 'grayscale(1) contrast(2.2) brightness(0.86)' },
-    { name: 'แถบบาร์โค้ดขาวดำ', crop: crops.barcodeBand, maxWidth: 2200, maxHeight: 900, filter: 'grayscale(1) contrast(2.4) brightness(1.05)', threshold: true },
-    { name: 'ครึ่งล่างเอียงซ้าย', crop: crops.lowerWide, maxWidth: 2200, maxHeight: 1400, filter: 'grayscale(1) contrast(1.8) brightness(0.95)', rotate: -6 },
-    { name: 'ครึ่งล่างเอียงขวา', crop: crops.lowerWide, maxWidth: 2200, maxHeight: 1400, filter: 'grayscale(1) contrast(1.8) brightness(0.95)', rotate: 6 }
+async function scanWithZxing(file) {
+  if (typeof ZXing === 'undefined' || !ZXing.BrowserMultiFormatReader) return '';
+  let url = '';
+  try {
+    url = URL.createObjectURL(file);
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = url;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+
+    const hints = new Map();
+    if (ZXing.DecodeHintType && ZXing.BarcodeFormat) {
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        ZXing.BarcodeFormat.EAN_13,
+        ZXing.BarcodeFormat.EAN_8,
+        ZXing.BarcodeFormat.UPC_A,
+        ZXing.BarcodeFormat.UPC_E,
+        ZXing.BarcodeFormat.CODE_128,
+        ZXing.BarcodeFormat.CODE_39,
+        ZXing.BarcodeFormat.CODE_93,
+        ZXing.BarcodeFormat.ITF
+      ].filter(Boolean));
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    }
+
+    const reader = new ZXing.BrowserMultiFormatReader(hints, 500);
+    const result = await reader.decodeFromImageElement(img);
+    try {
+      reader.reset();
+    } catch (err) {}
+    return normalizeScannedBarcode(result && (result.text || (typeof result.getText === 'function' ? result.getText() : '')));
+  } catch (err) {
+    return '';
+  } finally {
+    try {
+      if (url) URL.revokeObjectURL(url);
+    } catch (err) {}
+  }
+}
+
+async function buildBarcodeImageVariants(file) {
+  const img = await fileToImage(file);
+  if (!img) return [];
+  const rects = [
+    { x: 0.00, y: 0.32, w: 1.00, h: 0.48 },
+    { x: 0.04, y: 0.38, w: 0.92, h: 0.36 },
+    { x: 0.08, y: 0.42, w: 0.84, h: 0.30 },
+    { x: 0.00, y: 0.45, w: 1.00, h: 0.42 }
   ];
+  const out = [];
+  for (const rect of rects) {
+    const blob = await cropImageToBlob(img, rect);
+    if (blob) out.push(blob);
+  }
+  return out;
+}
 
-  return passes.map((pass) => {
-    let canvas = drawBarcodeCandidate(img, pass.crop, pass);
-    if (pass.threshold) applyBarcodeThreshold(canvas);
-    if (pass.rotate) canvas = rotateCanvas(canvas, pass.rotate);
-    return { name: pass.name, canvas };
+function fileToImage(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    img.src = url;
   });
 }
 
-function pctCrop(sourceWidth, sourceHeight, x, y, width, height) {
-  return {
-    x: sourceWidth * x,
-    y: sourceHeight * y,
-    width: sourceWidth * width,
-    height: sourceHeight * height
-  };
+function cropImageToBlob(img, rect) {
+  return new Promise((resolve) => {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (!w || !h) return resolve(null);
+
+    const sx = Math.max(0, Math.round(w * rect.x));
+    const sy = Math.max(0, Math.round(h * rect.y));
+    const sw = Math.min(w - sx, Math.round(w * rect.w));
+    const sh = Math.min(h - sy, Math.round(h * rect.h));
+    const scale = Math.min(2, 1800 / Math.max(sw, sh));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(sw * scale));
+    canvas.height = Math.max(1, Math.round(sh * scale));
+    const ctx = canvas.getContext('2d', { willReadFrequently: true }) || canvas.getContext('2d');
+    if (!ctx) return resolve(null);
+
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+
+    try {
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        const v = avg > 138 ? 255 : 0;
+        data[i] = v;
+        data[i + 1] = v;
+        data[i + 2] = v;
+      }
+      ctx.putImageData(imageData, 0, 0);
+    } catch (err) {}
+
+    canvas.toBlob((blob) => resolve(blob), 'image/png', 0.95);
+  });
 }
 
-function drawBarcodeCandidate(img, crop, options) {
-  const sourceWidth = img.naturalWidth || img.width;
-  const sourceHeight = img.naturalHeight || img.height;
-  const sx = clamp(crop.x, 0, sourceWidth - 1);
-  const sy = clamp(crop.y, 0, sourceHeight - 1);
-  const sw = clamp(crop.width, 1, sourceWidth - sx);
-  const sh = clamp(crop.height, 1, sourceHeight - sy);
-  const maxWidth = options.maxWidth || sw;
-  const maxHeight = options.maxHeight || sh;
-  const scale = Math.min(1.6, maxWidth / sw, maxHeight / sh);
-  const width = Math.max(1, Math.round(sw * scale));
-  const height = Math.max(1, Math.round(sh * scale));
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d', { willReadFrequently: Boolean(options.threshold) }) || canvas.getContext('2d');
-  if (!ctx) throw new Error('ไม่สามารถเตรียมรูปสำหรับสแกนได้');
-  if (options.filter && 'filter' in ctx) ctx.filter = options.filter;
-  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, width, height);
-  return canvas;
-}
-
-function applyBarcodeThreshold(canvas) {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true }) || canvas.getContext('2d');
-  if (!ctx) return;
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imageData.data;
-  let total = 0;
-  const count = data.length / 4;
-  for (let i = 0; i < data.length; i += 4) {
-    total += (data[i] * 0.299) + (data[i + 1] * 0.587) + (data[i + 2] * 0.114);
-  }
-  const threshold = clamp((total / count) * 0.92, 92, 172);
-  for (let i = 0; i < data.length; i += 4) {
-    const luma = (data[i] * 0.299) + (data[i + 1] * 0.587) + (data[i + 2] * 0.114);
-    const value = luma > threshold ? 255 : 0;
-    data[i] = value;
-    data[i + 1] = value;
-    data[i + 2] = value;
-  }
-  ctx.putImageData(imageData, 0, 0);
-}
-
-function rotateCanvas(source, degrees) {
-  const radians = degrees * Math.PI / 180;
-  const sin = Math.abs(Math.sin(radians));
-  const cos = Math.abs(Math.cos(radians));
-  const width = Math.ceil(source.width * cos + source.height * sin);
-  const height = Math.ceil(source.width * sin + source.height * cos);
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return source;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, height);
-  ctx.translate(width / 2, height / 2);
-  ctx.rotate(radians);
-  ctx.drawImage(source, -source.width / 2, -source.height / 2);
-  return canvas;
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
+function setScanHint(message, type) {
+  const el = $('barcodeScanHint');
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.remove('good', 'warn');
+  if (type) el.classList.add(type);
 }
 
 async function searchProductAfterScan(scannedBarcode) {
