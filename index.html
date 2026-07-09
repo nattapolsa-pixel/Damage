@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Sarabun:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20260709_03" />
+  <link rel="stylesheet" href="styles.css?v=20260709_04" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2/dist/chartjs-plugin-datalabels.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
@@ -598,11 +598,18 @@
             <div class="dash-panel-head dash-trend-head">
               <div class="dash-panel-title-row">
                 <span class="dash-panel-dot dot-purple"></span>
-                <h3>แนวโน้มรายเดือน (Monthly Trend)</h3>
+                <h3>แนวโน้ม (Trend)</h3>
               </div>
-              <div class="trend-toggle" role="group" aria-label="เลือกหน่วย">
-                <button type="button" id="trendModeQty" class="trend-toggle-btn active">จำนวน</button>
-                <button type="button" id="trendModeVal" class="trend-toggle-btn">มูลค่า (บาท)</button>
+              <div class="trend-controls">
+                <div class="trend-toggle" role="group" aria-label="ช่วงเวลา">
+                  <button type="button" id="trendGranMonth" class="trend-toggle-btn active">รายเดือน</button>
+                  <button type="button" id="trendGranWeek" class="trend-toggle-btn">รายสัปดาห์</button>
+                  <button type="button" id="trendGranDay" class="trend-toggle-btn">รายวัน</button>
+                </div>
+                <div class="trend-toggle" role="group" aria-label="เลือกหน่วย">
+                  <button type="button" id="trendModeQty" class="trend-toggle-btn active">จำนวน</button>
+                  <button type="button" id="trendModeVal" class="trend-toggle-btn">มูลค่า</button>
+                </div>
               </div>
             </div>
             <p id="chartTrendLabel" class="dash-trend-sub">จำนวน (หน่วย) รายเดือน · แท่งซ้อนตามประเภทสินค้า + เส้นแนวโน้ม · ตามฟิลเตอร์ที่เลือก</p>
@@ -960,6 +967,6 @@
   </div>
   <div id="toast" class="toast"></div>
 
-  <script src="script.js?v=20260709_05"></script>
+  <script src="script.js?v=20260709_06"></script>
 </body>
 </html>

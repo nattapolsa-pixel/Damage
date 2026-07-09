@@ -52,6 +52,7 @@ const state = {
   chartType: null,
   chartMonthlyTrend: null,
   trendMode: 'qty',
+  trendGran: 'month',
   dashboardRaw: [],
   dashFilters: { bu: [], damageType: [], shift: [], damageGroup: [] },
   loadingCount: 0
@@ -615,6 +616,9 @@ function bindDashboard() {
   $('btnRefreshDashboard').addEventListener('click', refreshDashboard);
   if ($('trendModeQty')) $('trendModeQty').addEventListener('click', () => setTrendMode('qty'));
   if ($('trendModeVal')) $('trendModeVal').addEventListener('click', () => setTrendMode('val'));
+  if ($('trendGranMonth')) $('trendGranMonth').addEventListener('click', () => setTrendGran('month'));
+  if ($('trendGranWeek')) $('trendGranWeek').addEventListener('click', () => setTrendGran('week'));
+  if ($('trendGranDay')) $('trendGranDay').addEventListener('click', () => setTrendGran('day'));
   document.addEventListener('click', () => { document.querySelectorAll('.ms-panel').forEach((p) => { p.style.display = 'none'; }); });
   // Trigger update when user presses Enter in search or date inputs
   ['dashQuery', 'dashStartDate', 'dashEndDate'].forEach((id) => {
@@ -1173,7 +1177,7 @@ function buildMultiSelect(containerId, key, items) {
   Object.assign(panel.style, { position: 'absolute', top: 'calc(100% + 4px)', left: '0', minWidth: '100%',
     width: 'max-content', maxWidth: '260px', maxHeight: '260px', overflowY: 'auto', background: '#fff',
     border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 12px 30px rgba(15,23,42,.16)',
-    padding: '6px', zIndex: '80', display: 'none' });
+    padding: '6px', zIndex: '9999', display: 'none' });
   const actions = panel.querySelector('.ms-actions');
   if (actions) Object.assign(actions.style, { display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     gap: '10px', padding: '2px 6px 6px', borderBottom: '1px solid #f1f5f9', marginBottom: '4px' });
@@ -1505,51 +1509,72 @@ function setTrendMode(mode) {
 
 // Month-over-month trend: stacked bars by product type + monthly total line + linear trend.
 // Follows whatever filters are active on the dashboard (records already filtered/normalized).
+function setTrendGran(g) {
+  state.trendGran = (g === 'week' || g === 'day') ? g : 'month';
+  [['trendGranMonth', 'month'], ['trendGranWeek', 'week'], ['trendGranDay', 'day']].forEach(([id, val]) => {
+    const b = $(id); if (b) b.classList.toggle('active', state.trendGran === val);
+  });
+  renderMonthlyTrend(state.dashboardRecords || []);
+}
+
 function renderMonthlyTrend(records) {
   if (typeof Chart === 'undefined') return;
   const ctx = $('chartMonthlyTrend');
   if (!ctx) return;
   const mode = state.trendMode || 'qty';
+  const gran = state.trendGran || 'month';
+  const isValMode = mode === 'val';
+  const pad = (n) => String(n).padStart(2, '0');
 
-  const buckets = new Map(); // 'YYYY-MM' -> { typeName: value }
+  // Bucket key + label per granularity (month / week: Mon-start / day)
+  const periodOf = (d) => {
+    if (gran === 'day') return { key: d.year + '-' + pad(d.month) + '-' + pad(d.day), label: d.day + '/' + d.month };
+    if (gran === 'week') {
+      const dt = new Date(d.year, d.month - 1, d.day);
+      dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7));
+      return { key: dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate()), label: dt.getDate() + '/' + (dt.getMonth() + 1) };
+    }
+    return { key: d.year + '-' + pad(d.month), label: MONTH_TH[d.month - 1] + ' ' + (d.year + 543) };
+  };
+
+  const buckets = new Map();
   (records || []).forEach((r) => {
     const d = parseDateFromRecord(r.date);
     if (!d || !d.month || d.month < 1 || d.month > 12) return;
-    const key = d.year + '-' + String(d.month).padStart(2, '0');
+    const p = periodOf(d);
     let t = String(r.damageType || '').trim();
     if (TREND_TYPES.indexOf(t) === -1) t = 'อื่นๆ';
-    const add = mode === 'val' ? guardedValue(r) : num(r.quantity);
-    if (!buckets.has(key)) buckets.set(key, {});
-    const b = buckets.get(key);
+    const add = isValMode ? guardedValue(r) : num(r.quantity);
+    if (!buckets.has(p.key)) buckets.set(p.key, { label: p.label, vals: {} });
+    const b = buckets.get(p.key).vals;
     b[t] = (b[t] || 0) + add;
   });
 
   const keys = [...buckets.keys()].sort();
-  const labels = keys.map((k) => {
-    const p = k.split('-');
-    return MONTH_TH[parseInt(p[1], 10) - 1] + ' ' + (parseInt(p[0], 10) + 543);
-  });
-  const hasOther = keys.some((k) => (buckets.get(k)['อื่นๆ'] || 0) > 0);
+  const labels = keys.map((k) => buckets.get(k).label);
+  const valsOf = (k) => buckets.get(k).vals;
+  const hasOther = keys.some((k) => (valsOf(k)['อื่นๆ'] || 0) > 0);
   const useSeries = hasOther ? TREND_TYPES.concat(['อื่นๆ']) : TREND_TYPES;
   const round2 = (v) => Math.round(v * 100) / 100;
+  const showLabels = keys.length <= 14;
 
-  const totals = keys.map((k) => useSeries.reduce((s, n) => s + (buckets.get(k)[n] || 0), 0));
+  const totals = keys.map((k) => useSeries.reduce((s, n) => s + (valsOf(k)[n] || 0), 0));
   const trend = linReg(totals);
-  const maxV = Math.max(1, ...totals, ...trend) * 1.18;
-  const isValMode = mode === 'val';
-  const lbl = (v) => (!v ? '' : (isValMode
-    ? Math.round(v).toLocaleString('th-TH') + ' บาท'
-    : v.toLocaleString('th-TH')));
+  const maxV = Math.max(1, ...totals, ...trend) * (showLabels ? 1.26 : 1.1);
+
+  const lbl = (v) => (!v ? '' : (isValMode ? Math.round(v).toLocaleString('th-TH') + ' บาท' : v.toLocaleString('th-TH')));
+  const deltaAt = (i) => { if (i <= 0) return null; const prev = totals[i - 1]; if (!prev) return null; const diff = totals[i] - prev; return { diff, pct: diff / prev * 100 }; };
+  const deltaText = (i) => { const d = deltaAt(i); if (!d) return ''; return (d.diff > 0 ? '▲' : (d.diff < 0 ? '▼' : '→')) + ' ' + (d.pct >= 0 ? '+' : '') + d.pct.toFixed(0) + '%'; };
+  const deltaColor = (i) => { const d = deltaAt(i); if (!d) return '#94a3b8'; return d.diff > 0 ? '#dc2626' : (d.diff < 0 ? '#16a34a' : '#94a3b8'); };
 
   const datasets = useSeries.map((name) => ({
     label: name,
-    data: keys.map((k) => round2(buckets.get(k)[name] || 0)),
+    data: keys.map((k) => round2(valsOf(k)[name] || 0)),
     backgroundColor: TREND_TYPE_COLORS[name] || '#94a3b8',
     stack: 'stk', borderWidth: 0, borderRadius: 3, order: 3, yAxisID: 'y',
     datalabels: {
-      display: (c) => (c.dataset.data[c.dataIndex] || 0) >= maxV * 0.07,
-      color: '#ffffff', font: { weight: 'bold', size: 10 }, anchor: 'center', align: 'center',
-      formatter: lbl
+      display: (c) => showLabels && (c.dataset.data[c.dataIndex] || 0) >= maxV * 0.08,
+      color: '#ffffff', font: { weight: 'bold', size: 10 }, anchor: 'center', align: 'center', formatter: lbl
     }
   }));
   datasets.push({
@@ -1557,8 +1582,10 @@ function renderMonthlyTrend(records) {
     borderColor: '#111827', backgroundColor: '#111827', borderWidth: 2.4,
     pointRadius: 3, pointBackgroundColor: '#111827', tension: 0.3, order: 1, yAxisID: 'y1',
     datalabels: {
-      display: true, anchor: 'end', align: 'top', offset: 6, clamp: true,
-      color: '#0f172a', font: { weight: 'bold', size: 11 }, formatter: lbl
+      labels: {
+        value: { display: () => showLabels, anchor: 'end', align: 'top', offset: 6, clamp: true, color: '#0f172a', font: { weight: 'bold', size: 11 }, formatter: lbl },
+        delta: { display: () => showLabels, anchor: 'end', align: 'top', offset: 21, clamp: true, color: (c) => deltaColor(c.dataIndex), font: { weight: 'bold', size: 9 }, formatter: (v, c) => deltaText(c.dataIndex) }
+      }
     }
   });
   datasets.push({
@@ -1568,19 +1595,18 @@ function renderMonthlyTrend(records) {
     datalabels: { display: false }
   });
 
-  const isVal = mode === 'val';
+  const granLabel = gran === 'day' ? 'รายวัน' : (gran === 'week' ? 'รายสัปดาห์' : 'รายเดือน');
+  const prevWord = gran === 'day' ? 'วันก่อน' : (gran === 'week' ? 'สัปดาห์ก่อน' : 'เดือนก่อน');
   const el = $('chartTrendLabel');
-  if (el) el.textContent = (isVal ? 'มูลค่ารวม (บาท)' : 'จำนวน (หน่วย)') +
-    ' รายเดือน · แท่งซ้อนตามประเภทสินค้า + เส้นแนวโน้ม · ตามฟิลเตอร์ที่เลือก';
+  if (el) el.textContent = (isValMode ? 'มูลค่ารวม (บาท)' : 'จำนวน (หน่วย)') + ' ' + granLabel + ' · Stack ตามประเภทสินค้า · ▲▼ เทียบ' + prevWord;
 
   const fmt = (v) => Number(v).toLocaleString('th-TH');
 
   if (state.chartMonthlyTrend) { state.chartMonthlyTrend.destroy(); state.chartMonthlyTrend = null; }
-  // Defensive: drop any chart still bound to this canvas (e.g. after a prior failed render)
   const existingTrend = (typeof Chart.getChart === 'function') ? Chart.getChart(ctx) : null;
   if (existingTrend) existingTrend.destroy();
   const DL = window.ChartDataLabels || null;
-  if (DL) { try { Chart.unregister(DL); } catch (e) {} } // scope data labels to this chart only
+  if (DL) { try { Chart.unregister(DL); } catch (e) {} }
   state.chartMonthlyTrend = new Chart(ctx, {
     type: 'bar',
     plugins: DL ? [DL] : [],
@@ -1592,18 +1618,19 @@ function renderMonthlyTrend(records) {
         legend: { position: 'top', labels: { font: { size: 11, weight: 'bold' }, boxWidth: 12, padding: 10 } },
         tooltip: {
           callbacks: {
-            label: (c) => ' ' + c.dataset.label + ': ' +
-              Number(c.parsed.y).toLocaleString('th-TH', { maximumFractionDigits: isVal ? 0 : 0 }) + (isVal ? ' บาท' : '')
+            label: (c) => ' ' + c.dataset.label + ': ' + Number(c.parsed.y).toLocaleString('th-TH') + (isValMode ? ' บาท' : ''),
+            footer: (items) => {
+              const i = (items && items.length) ? items[0].dataIndex : -1;
+              const d = deltaAt(i); if (!d) return '';
+              const sign = d.diff > 0 ? '+' : '';
+              return 'เทียบ' + prevWord + ': ' + sign + Math.round(d.diff).toLocaleString('th-TH') + (isValMode ? ' บาท' : '') + ' (' + sign + d.pct.toFixed(1) + '%)';
+            }
           }
         }
       },
       scales: {
-        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-        y: {
-          stacked: true, min: 0, max: maxV, grid: { color: '#f1f5f9' },
-          ticks: { font: { size: 10 }, callback: fmt },
-          title: { display: true, text: isVal ? 'บาท' : 'จำนวน (หน่วย)', font: { size: 10 } }
-        },
+        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 }, autoSkip: true, maxRotation: 0 } },
+        y: { stacked: true, min: 0, max: maxV, grid: { color: '#f1f5f9' }, ticks: { font: { size: 10 }, callback: fmt }, title: { display: true, text: isValMode ? 'บาท' : 'จำนวน (หน่วย)', font: { size: 10 } } },
         y1: { stacked: false, min: 0, max: maxV, display: false, grid: { drawOnChartArea: false } }
       }
     }

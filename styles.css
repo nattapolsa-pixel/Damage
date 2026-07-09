@@ -1709,3 +1709,4 @@ input[type="submit"],
 .ms-opt{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;font-size:14px;color:#334155;cursor:pointer;white-space:nowrap}
 .ms-opt:hover{background:#f8fafc}
 .ms-opt input{width:16px;height:16px;accent-color:#6366f1;cursor:pointer;flex:0 0 auto}
+.trend-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}

@@ -1,6 +1,6 @@
 {
   "apiUrl": "https://script.google.com/macros/s/AKfycbzu8fz4wiflZiNoGRQR78XAUUKwagORkn6IoGQVsfhP3ZbbUROq2pzS5OZcZWn9OuTGYg/exec",
-  "apiProxyUrl": "/.netlify/functions/damage-api",
+  "apiProxyUrl": "",
   "apiToken": "",
   "appName": "Damage 2026 Form",
   "maxImageWidth": 1280,
