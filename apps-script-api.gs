@@ -518,7 +518,7 @@ function getDashboardRecordsApi_(options) {
     if (bu !== 'ทั้งหมด' && r.bu !== bu) continue;
     if (damageType !== 'ทั้งหมด' && r.damageType !== damageType) continue;
     if (shift !== 'ทั้งหมด' && normalizeSimple_(r.shift) !== normalizeSimple_(shift)) continue;
-    if (damageGroup !== 'ทั้งหมด' && normalizeSimple_(r.damageGroup) !== normalizeSimple_(damageGroup)) continue;
+    if (damageGroup !== 'ทั้งหมด' && normalizeGroup_(r.damageGroup) !== normalizeGroup_(damageGroup)) continue;
     if (query) {
       const haystack = normalizeKey_([
         r.date, r.bu, r.barcode, r.itemCode, r.itemName, r.damageType, r.damageDescription,
@@ -901,6 +901,11 @@ function normalizeKey_(value) {
 
 function normalizeSimple_(value) {
   return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+// Group key that merges inconsistent spellings, e.g. "OPT" == "Opt." and "Out bound" == "Outbound"
+function normalizeGroup_(value) {
+  return String(value || '').toLowerCase().replace(/\./g, '').replace(/\s+/g, '').trim();
 }
 
 function parseDateForSheet_(value) {

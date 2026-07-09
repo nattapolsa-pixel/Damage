@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Sarabun:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20260625_12" />
+  <link rel="stylesheet" href="styles.css?v=20260709_01" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -592,6 +592,23 @@
 
         <div id="section-charts" style="margin-bottom:14px">
           <!-- Charts Section -->
+          <!-- Monthly trend (month-over-month) -->
+          <div class="dash-chart-panel dash-trend-panel" style="margin-bottom:14px">
+            <div class="dash-panel-head dash-trend-head">
+              <div class="dash-panel-title-row">
+                <span class="dash-panel-dot dot-purple"></span>
+                <h3>แนวโน้มรายเดือน (Monthly Trend)</h3>
+              </div>
+              <div class="trend-toggle" role="group" aria-label="เลือกหน่วย">
+                <button type="button" id="trendModeQty" class="trend-toggle-btn active">จำนวน</button>
+                <button type="button" id="trendModeVal" class="trend-toggle-btn">มูลค่า (บาท)</button>
+              </div>
+            </div>
+            <p id="chartTrendLabel" class="dash-trend-sub">จำนวน (หน่วย) รายเดือน · แท่งซ้อนตามประเภทสินค้า + เส้นแนวโน้ม · ตามฟิลเตอร์ที่เลือก</p>
+            <div class="chart-canvas-wrap chart-canvas-trend">
+              <canvas id="chartMonthlyTrend"></canvas>
+            </div>
+          </div>
           <div class="dash-charts-row">
             <!-- Monthly daily trend -->
             <div class="dash-chart-panel dash-chart-trend">
@@ -942,6 +959,6 @@
   </div>
   <div id="toast" class="toast"></div>
 
-  <script src="script.js?v=20260626_06"></script>
+  <script src="script.js?v=20260709_01"></script>
 </body>
 </html>

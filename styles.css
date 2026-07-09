@@ -879,6 +879,7 @@ input[readonly] {
 .dot-green{background:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,.18)}
 .dot-amber{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.18)}
 .dot-blue{background:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.18)}
+.dot-purple{background:#8b5cf6;box-shadow:0 0 0 3px rgba(139,92,246,.18)}
 
 /* V2 Bar Charts */
 .bar-list.v2{display:grid;gap:10px}
@@ -937,6 +938,15 @@ input[readonly] {
 .chart-canvas-wrap{position:relative;height:200px}
 .chart-canvas-wrap canvas{width:100%!important;height:100%!important}
 .donut-wrap{height:190px}
+.chart-canvas-trend{height:340px}
+
+/* Monthly trend panel */
+.dash-trend-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.trend-toggle{display:inline-flex;background:#f1f5f9;border-radius:10px;padding:3px;gap:2px}
+.trend-toggle-btn{border:none;background:transparent;padding:6px 14px;border-radius:8px;font-size:13px;font-weight:600;color:#64748b;cursor:pointer;transition:.15s}
+.trend-toggle-btn:hover{color:#334155}
+.trend-toggle-btn.active{background:#fff;color:#1e293b;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.dash-trend-sub{margin:2px 0 10px;color:#64748b;font-size:12px}
 
 /* Detail Stats Panel */
 .detail-stats{display:grid;gap:10px;overflow-y:auto;max-height:220px}

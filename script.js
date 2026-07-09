@@ -50,6 +50,8 @@ const state = {
   toastTimer: null,
   chartMonthly: null,
   chartType: null,
+  chartMonthlyTrend: null,
+  trendMode: 'qty',
   loadingCount: 0
 };
 
@@ -609,6 +611,8 @@ function bindLatest() {
 
 function bindDashboard() {
   $('btnRefreshDashboard').addEventListener('click', refreshDashboard);
+  if ($('trendModeQty')) $('trendModeQty').addEventListener('click', () => setTrendMode('qty'));
+  if ($('trendModeVal')) $('trendModeVal').addEventListener('click', () => setTrendMode('val'));
   // Trigger update when user presses Enter in search or date inputs
   ['dashQuery', 'dashStartDate', 'dashEndDate'].forEach((id) => {
     if ($(id)) {
@@ -1134,6 +1138,8 @@ async function refreshDashboard() {
     const res = await apiGet('getDashboardRecords', payload);
     const data = unwrapApi(res);
     state.dashboardRecords = data.records || [];
+    // Merge inconsistent group spellings (e.g. "OPT" vs "Opt.") so counts/filters align
+    state.dashboardRecords.forEach((r) => { r.damageGroup = canonGroup(r.damageGroup); });
     renderDashboard(state.dashboardRecords);
   } catch (err) {
     toast('โหลด Dashboard ไม่สำเร็จ: ' + err.message, 'bad');
@@ -1159,6 +1165,7 @@ function renderDashboard(records) {
   $('dashboardRows').innerHTML = records.length ? records.slice(0, 12).map(recordCard).join('') : '<div class="empty" style="margin:20px 0">ไม่มีข้อมูลตามเงื่อนไข</div>';
 
   renderCharts(records);
+  renderMonthlyTrend(records);
   renderDetailStats(records);
   renderDataQuality(records);
   renderExtendedKPIs(records);
@@ -1203,16 +1210,26 @@ function groupSum(records, keyGroup, keyValue) {
 function parseDateFromRecord(dateStr) {
   if (!dateStr) return null;
   const s = String(dateStr).trim();
-  // Try DD/MM/YYYY or DD-MM-YYYY
+  // The sheet stores dates in TWO display formats:
+  //  - Imported rows: m/d/yyyy with Buddhist year (e.g. "1/5/2569" = 5 Jan 2026)
+  //  - App rows:      dd/MM/yyyy with CE year   (e.g. "19/05/2026" = 19 May 2026)
+  // Disambiguate by the year: > 2400 => Buddhist import => month-first order.
   let m = s.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/);
   if (m) {
+    const a = parseInt(m[1], 10), b = parseInt(m[2], 10);
     let year = parseInt(m[3], 10);
-    if (year > 2400) year -= 543; // Convert from Buddhist Era
-    return { day: parseInt(m[1], 10), month: parseInt(m[2], 10), year };
+    let day, month;
+    if (year > 2400) { month = a; day = b; year -= 543; } // Buddhist import: m/d/yyyy
+    else { day = a; month = b; }                            // CE app row: d/m/yyyy
+    return { day, month, year };
   }
-  // Try YYYY-MM-DD
+  // Try YYYY-MM-DD (also handle Buddhist year)
   m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) return { day: parseInt(m[3], 10), month: parseInt(m[2], 10), year: parseInt(m[1], 10) };
+  if (m) {
+    let year = parseInt(m[1], 10);
+    if (year > 2400) year -= 543;
+    return { day: parseInt(m[3], 10), month: parseInt(m[2], 10), year };
+  }
   // Try DD/MM/YY
   m = s.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{2})$/);
   if (m) {
@@ -1359,6 +1376,145 @@ function renderCharts(records) {
       });
     }
   }
+}
+
+// Canonicalize damage-group spelling so "OPT" and "Opt." (and "Out bound"/"Outbound") merge
+function canonGroup(value) {
+  const s = String(value == null ? '' : value).trim();
+  if (!s) return '';
+  const k = s.toLowerCase().replace(/\./g, '').replace(/\s+/g, '');
+  if (k === 'opt') return 'OPT';
+  if (k === 'sup') return 'SUP';
+  if (k === 'outbound') return 'Out bound';
+  return s;
+}
+
+// Guard against corrupt totals (e.g. a barcode pasted into มูลค่ารวม):
+// if the stored total is wildly larger than unitCost x qty, use the computed value instead.
+function guardedValue(r) {
+  const total = num(r.totalValue);
+  const calc = num(r.unitCost) * num(r.quantity);
+  if (calc > 0 && total > calc * 100) return calc;
+  return total;
+}
+
+function linReg(y) {
+  const n = y.length;
+  if (!n) return [];
+  const xs = y.map((_, i) => i);
+  const sx = xs.reduce((a, b) => a + b, 0);
+  const sy = y.reduce((a, b) => a + b, 0);
+  const sxx = xs.reduce((a, b) => a + b * b, 0);
+  const sxy = xs.reduce((a, b, i) => a + b * y[i], 0);
+  const d = n * sxx - sx * sx;
+  if (d === 0) return y.slice();
+  const m = (n * sxy - sx * sy) / d;
+  const b = (sy - m * sx) / n;
+  return xs.map((x) => Math.max(0, m * x + b));
+}
+
+const TREND_TYPES = ['สินค้าชำรุด', 'สินค้าแตกแพค', 'สินค้าหมดอายุ'];
+const TREND_TYPE_COLORS = {
+  'สินค้าชำรุด': '#3b82f6',
+  'สินค้าแตกแพค': '#f59e0b',
+  'สินค้าหมดอายุ': '#ef4444',
+  'อื่นๆ': '#94a3b8'
+};
+
+function setTrendMode(mode) {
+  state.trendMode = mode === 'val' ? 'val' : 'qty';
+  const q = $('trendModeQty'), v = $('trendModeVal');
+  if (q) q.classList.toggle('active', state.trendMode === 'qty');
+  if (v) v.classList.toggle('active', state.trendMode === 'val');
+  renderMonthlyTrend(state.dashboardRecords || []);
+}
+
+// Month-over-month trend: stacked bars by product type + monthly total line + linear trend.
+// Follows whatever filters are active on the dashboard (records already filtered/normalized).
+function renderMonthlyTrend(records) {
+  if (typeof Chart === 'undefined') return;
+  const ctx = $('chartMonthlyTrend');
+  if (!ctx) return;
+  const mode = state.trendMode || 'qty';
+
+  const buckets = new Map(); // 'YYYY-MM' -> { typeName: value }
+  (records || []).forEach((r) => {
+    const d = parseDateFromRecord(r.date);
+    if (!d || !d.month || d.month < 1 || d.month > 12) return;
+    const key = d.year + '-' + String(d.month).padStart(2, '0');
+    let t = String(r.damageType || '').trim();
+    if (TREND_TYPES.indexOf(t) === -1) t = 'อื่นๆ';
+    const add = mode === 'val' ? guardedValue(r) : num(r.quantity);
+    if (!buckets.has(key)) buckets.set(key, {});
+    const b = buckets.get(key);
+    b[t] = (b[t] || 0) + add;
+  });
+
+  const keys = [...buckets.keys()].sort();
+  const labels = keys.map((k) => {
+    const p = k.split('-');
+    return MONTH_TH[parseInt(p[1], 10) - 1] + ' ' + (parseInt(p[0], 10) + 543);
+  });
+  const hasOther = keys.some((k) => (buckets.get(k)['อื่นๆ'] || 0) > 0);
+  const useSeries = hasOther ? TREND_TYPES.concat(['อื่นๆ']) : TREND_TYPES;
+  const round2 = (v) => Math.round(v * 100) / 100;
+
+  const datasets = useSeries.map((name) => ({
+    label: name,
+    data: keys.map((k) => round2(buckets.get(k)[name] || 0)),
+    backgroundColor: TREND_TYPE_COLORS[name] || '#94a3b8',
+    stack: 'stk', borderWidth: 0, borderRadius: 3, order: 3, yAxisID: 'y'
+  }));
+  const totals = keys.map((k) => useSeries.reduce((s, n) => s + (buckets.get(k)[n] || 0), 0));
+  const trend = linReg(totals);
+  const maxV = Math.max(1, ...totals, ...trend) * 1.15;
+
+  datasets.push({
+    label: 'ยอดรวม', type: 'line', data: totals.map(round2),
+    borderColor: '#111827', backgroundColor: '#111827', borderWidth: 2.4,
+    pointRadius: 3, pointBackgroundColor: '#111827', tension: 0.3, order: 1, yAxisID: 'y1'
+  });
+  datasets.push({
+    label: 'เส้นแนวโน้ม', type: 'line', data: trend.map(round2),
+    borderColor: '#8b5cf6', borderDash: [6, 5], borderWidth: 2,
+    pointRadius: 0, tension: 0, order: 2, yAxisID: 'y1', fill: false
+  });
+
+  const isVal = mode === 'val';
+  const el = $('chartTrendLabel');
+  if (el) el.textContent = (isVal ? 'มูลค่ารวม (บาท)' : 'จำนวน (หน่วย)') +
+    ' รายเดือน · แท่งซ้อนตามประเภทสินค้า + เส้นแนวโน้ม · ตามฟิลเตอร์ที่เลือก';
+
+  const fmt = (v) => isVal
+    ? (Math.abs(v) >= 1000 ? (v / 1000).toLocaleString('th-TH', { maximumFractionDigits: 1 }) + 'K' : String(v))
+    : Number(v).toLocaleString('th-TH');
+
+  if (state.chartMonthlyTrend) { state.chartMonthlyTrend.destroy(); state.chartMonthlyTrend = null; }
+  state.chartMonthlyTrend = new Chart(ctx, {
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top', labels: { font: { size: 11, weight: 'bold' }, boxWidth: 12, padding: 10 } },
+        tooltip: {
+          callbacks: {
+            label: (c) => ' ' + c.dataset.label + ': ' +
+              Number(c.parsed.y).toLocaleString('th-TH', { maximumFractionDigits: isVal ? 0 : 0 }) + (isVal ? ' บาท' : '')
+          }
+        }
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
+        y: {
+          stacked: true, min: 0, max: maxV, grid: { color: '#f1f5f9' },
+          ticks: { font: { size: 10 }, callback: fmt },
+          title: { display: true, text: isVal ? 'บาท' : 'จำนวน (หน่วย)', font: { size: 10 } }
+        },
+        y1: { stacked: false, min: 0, max: maxV, display: false, grid: { drawOnChartArea: false } }
+      }
+    }
+  });
 }
 
 function renderDetailStats(records) {
@@ -2717,6 +2873,7 @@ function html2canvasWithCanvasFix(element, options = {}) {
     throw err;
   });
 }
+
 
 function exportSectionToImage(elementId, filenamePrefix) {
   try {
