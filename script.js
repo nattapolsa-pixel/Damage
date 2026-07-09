@@ -615,7 +615,7 @@ function bindDashboard() {
   $('btnRefreshDashboard').addEventListener('click', refreshDashboard);
   if ($('trendModeQty')) $('trendModeQty').addEventListener('click', () => setTrendMode('qty'));
   if ($('trendModeVal')) $('trendModeVal').addEventListener('click', () => setTrendMode('val'));
-  document.addEventListener('click', () => { document.querySelectorAll('.ms-panel').forEach((p) => p.classList.add('hidden')); });
+  document.addEventListener('click', () => { document.querySelectorAll('.ms-panel').forEach((p) => { p.style.display = 'none'; }); });
   // Trigger update when user presses Enter in search or date inputs
   ['dashQuery', 'dashStartDate', 'dashEndDate'].forEach((id) => {
     if ($(id)) {
@@ -1153,34 +1153,59 @@ function buildMultiSelect(containerId, key, items) {
   const box = $(containerId);
   if (!box) return;
   box.classList.add('ms');
+  box.style.position = 'relative';
+  box.style.display = 'block';
   const escq = (v) => String(v).replace(/"/g, '&quot;');
   box.innerHTML =
     '<button type="button" class="ms-btn"><span class="ms-text">ทั้งหมด</span><span class="ms-caret">▾</span></button>' +
-    '<div class="ms-panel hidden"><div class="ms-actions"><span class="ms-hint">เลือกได้หลายรายการ</span>' +
+    '<div class="ms-panel"><div class="ms-actions"><span class="ms-hint">เลือกได้หลายรายการ</span>' +
     '<button type="button" class="ms-clear">ล้าง</button></div>' +
     (items || []).map((v) => '<label class="ms-opt"><input type="checkbox" value="' + escq(v) + '"><span>' + esc(v) + '</span></label>').join('') +
     '</div>';
   const btn = box.querySelector('.ms-btn');
   const panel = box.querySelector('.ms-panel');
   const text = box.querySelector('.ms-text');
+  // Inline styles so the dropdown stays compact/floating even if the stylesheet is cached
+  Object.assign(btn.style, { display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: '8px', width: '100%', padding: '9px 12px', border: '1px solid #d7dee8', borderRadius: '10px',
+    background: '#fff', font: 'inherit', fontSize: '14px', color: '#1e293b', cursor: 'pointer' });
+  Object.assign(text.style, { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+  Object.assign(panel.style, { position: 'absolute', top: 'calc(100% + 4px)', left: '0', minWidth: '100%',
+    width: 'max-content', maxWidth: '260px', maxHeight: '260px', overflowY: 'auto', background: '#fff',
+    border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 12px 30px rgba(15,23,42,.16)',
+    padding: '6px', zIndex: '80', display: 'none' });
+  const actions = panel.querySelector('.ms-actions');
+  if (actions) Object.assign(actions.style, { display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: '10px', padding: '2px 6px 6px', borderBottom: '1px solid #f1f5f9', marginBottom: '4px' });
+  const hint = panel.querySelector('.ms-hint');
+  if (hint) Object.assign(hint.style, { fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' });
+  const clr = box.querySelector('.ms-clear');
+  Object.assign(clr.style, { border: 'none', background: '#f1f5f9', color: '#475569', borderRadius: '7px',
+    padding: '3px 10px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' });
+  panel.querySelectorAll('.ms-opt').forEach((o) => {
+    Object.assign(o.style, { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px',
+      borderRadius: '8px', fontSize: '14px', color: '#334155', whiteSpace: 'nowrap', cursor: 'pointer' });
+    const inp = o.querySelector('input');
+    inp.style.setProperty('width', '16px', 'important');
+    inp.style.setProperty('height', '16px', 'important');
+    inp.style.setProperty('flex', '0 0 auto', 'important');
+    inp.style.accentColor = '#6366f1';
+    inp.style.cursor = 'pointer';
+  });
+  const open = () => { document.querySelectorAll('.ms-panel').forEach((p) => { p.style.display = 'none'; }); panel.style.display = 'block'; };
+  const close = () => { panel.style.display = 'none'; };
   const sync = () => {
-    const sel = [...box.querySelectorAll('.ms-opt input:checked')].map((c) => c.value);
+    const sel = [...panel.querySelectorAll('.ms-opt input:checked')].map((c) => c.value);
     state.dashFilters[key] = sel;
     text.textContent = sel.length === 0 ? 'ทั้งหมด' : (sel.length <= 2 ? sel.join(', ') : (sel.length + ' รายการ'));
     box.classList.toggle('ms-on', sel.length > 0);
+    btn.style.borderColor = sel.length > 0 ? '#6366f1' : '#d7dee8';
     applyDashboardFilters();
   };
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    document.querySelectorAll('.ms-panel').forEach((p) => { if (p !== panel) p.classList.add('hidden'); });
-    panel.classList.toggle('hidden');
-  });
+  btn.addEventListener('click', (e) => { e.stopPropagation(); (panel.style.display === 'block') ? close() : open(); });
   panel.addEventListener('click', (e) => e.stopPropagation());
-  box.querySelector('.ms-clear').addEventListener('click', () => {
-    box.querySelectorAll('.ms-opt input').forEach((c) => { c.checked = false; });
-    sync();
-  });
-  box.querySelectorAll('.ms-opt input').forEach((c) => c.addEventListener('change', sync));
+  clr.addEventListener('click', () => { panel.querySelectorAll('.ms-opt input').forEach((c) => { c.checked = false; }); sync(); });
+  panel.querySelectorAll('.ms-opt input').forEach((c) => c.addEventListener('change', sync));
 }
 
 function applyDashboardFilters() {
@@ -1513,7 +1538,7 @@ function renderMonthlyTrend(records) {
   const maxV = Math.max(1, ...totals, ...trend) * 1.18;
   const isValMode = mode === 'val';
   const lbl = (v) => (!v ? '' : (isValMode
-    ? (v >= 1000 ? (v / 1000).toLocaleString('th-TH', { maximumFractionDigits: v >= 10000 ? 0 : 1 }) + 'K' : Math.round(v).toLocaleString('th-TH'))
+    ? Math.round(v).toLocaleString('th-TH') + ' บาท'
     : v.toLocaleString('th-TH')));
 
   const datasets = useSeries.map((name) => ({
@@ -1548,9 +1573,7 @@ function renderMonthlyTrend(records) {
   if (el) el.textContent = (isVal ? 'มูลค่ารวม (บาท)' : 'จำนวน (หน่วย)') +
     ' รายเดือน · แท่งซ้อนตามประเภทสินค้า + เส้นแนวโน้ม · ตามฟิลเตอร์ที่เลือก';
 
-  const fmt = (v) => isVal
-    ? (Math.abs(v) >= 1000 ? (v / 1000).toLocaleString('th-TH', { maximumFractionDigits: 1 }) + 'K' : String(v))
-    : Number(v).toLocaleString('th-TH');
+  const fmt = (v) => Number(v).toLocaleString('th-TH');
 
   if (state.chartMonthlyTrend) { state.chartMonthlyTrend.destroy(); state.chartMonthlyTrend = null; }
   // Defensive: drop any chart still bound to this canvas (e.g. after a prior failed render)
