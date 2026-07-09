@@ -1693,43 +1693,19 @@ input[type="submit"],
     padding: 12px !important;
     min-height: auto !important;
   }
-  
-  .dash-kpi * {
-    color: #000000 !important;
-  }
-  
-  .dash-kpi-badge {
-    background: #f1f5f9 !important;
-    border: 1px solid #cbd5e1 !important;
-    color: #000000 !important;
-  }
-  
-  .dash-kpi:after {
-    display: none !important;
-  }
-  
-  .ext-kpi, .ext-kpi * {
-    color: #000000 !important;
-  }
-  
-  .qf-bar-track {
-    border: 1px solid #cbd5e1 !important;
-    background: #f1f5f9 !important;
-  }
-  
-  .qf-bar-fill {
-    background: #3b82f6 !important;
-    border: 1px solid #2563eb !important;
-  }
 
-  .dash-section-divider {
-    margin: 12px 0 8px 0 !important;
-    padding: 0 !important;
-  }
-  
-  canvas {
-    max-width: 100% !important;
-    height: auto !important;
-  }
-}
-
+/* Multi-select filter (dashboard) */
+.ms{position:relative;display:block}
+.ms-btn{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;border:1px solid #d7dee8;border-radius:10px;background:#fff;font:inherit;font-size:14px;color:#1e293b;cursor:pointer}
+.ms.ms-on .ms-btn{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.12)}
+.ms-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ms-caret{color:#94a3b8;font-size:12px;flex:0 0 auto}
+.ms-panel{position:absolute;z-index:60;top:calc(100% + 4px);left:0;min-width:100%;max-height:260px;overflow:auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 12px 30px rgba(15,23,42,.16);padding:6px}
+.ms-panel.hidden{display:none}
+.ms-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 8px 6px;border-bottom:1px solid #f1f5f9;margin-bottom:4px}
+.ms-hint{font-size:11px;color:#94a3b8;white-space:nowrap}
+.ms-clear{border:none;background:#f1f5f9;color:#475569;border-radius:7px;padding:3px 10px;font-size:12px;font-weight:600;cursor:pointer}
+.ms-clear:hover{background:#e2e8f0}
+.ms-opt{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;font-size:14px;color:#334155;cursor:pointer;white-space:nowrap}
+.ms-opt:hover{background:#f8fafc}
+.ms-opt input{width:16px;height:16px;accent-color:#6366f1;cursor:pointer;flex:0 0 auto}

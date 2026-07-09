@@ -7,8 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Sarabun:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20260709_02" />
+  <link rel="stylesheet" href="styles.css?v=20260709_03" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2/dist/chartjs-plugin-datalabels.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -430,19 +431,19 @@
           </label>
           <label>
             BU
-            <select id="dashBu"></select>
+            <div id="dashBu" class="ms" data-key="bu"></div>
           </label>
           <label>
             ประเภทสินค้า
-            <select id="dashDamageType"></select>
+            <div id="dashDamageType" class="ms" data-key="damageType"></div>
           </label>
           <label>
             กะ
-            <select id="dashShift"></select>
+            <div id="dashShift" class="ms" data-key="shift"></div>
           </label>
           <label>
             กลุ่มเสียหาย
-            <select id="dashDamageGroup"></select>
+            <div id="dashDamageGroup" class="ms" data-key="damageGroup"></div>
           </label>
           <label>
             จากวันที่
@@ -959,6 +960,6 @@
   </div>
   <div id="toast" class="toast"></div>
 
-  <script src="script.js?v=20260709_02"></script>
+  <script src="script.js?v=20260709_04"></script>
 </body>
 </html>

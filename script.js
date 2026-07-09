@@ -52,6 +52,8 @@ const state = {
   chartType: null,
   chartMonthlyTrend: null,
   trendMode: 'qty',
+  dashboardRaw: [],
+  dashFilters: { bu: [], damageType: [], shift: [], damageGroup: [] },
   loadingCount: 0
 };
 
@@ -182,10 +184,10 @@ function fillOptions(options) {
   fillSelect('shift', options.shifts, 'เลือกกะ');
   fillSelect('affiliation', options.affiliations, 'เลือกสังกัด');
 
-  fillSelect('dashBu', ['ทั้งหมด', ...(options.bu || [])], null);
-  fillSelect('dashDamageType', ['ทั้งหมด', ...(options.damageTypes || [])], null);
-  fillSelect('dashShift', ['ทั้งหมด', ...(options.shifts || [])], null);
-  fillSelect('dashDamageGroup', ['ทั้งหมด', ...(options.damageGroups || [])], null);
+  buildMultiSelect('dashBu', 'bu', options.bu || []);
+  buildMultiSelect('dashDamageType', 'damageType', options.damageTypes || []);
+  buildMultiSelect('dashShift', 'shift', options.shifts || []);
+  buildMultiSelect('dashDamageGroup', 'damageGroup', options.damageGroups || []);
 }
 
 function fillSelect(id, items, blankLabel) {
@@ -613,6 +615,7 @@ function bindDashboard() {
   $('btnRefreshDashboard').addEventListener('click', refreshDashboard);
   if ($('trendModeQty')) $('trendModeQty').addEventListener('click', () => setTrendMode('qty'));
   if ($('trendModeVal')) $('trendModeVal').addEventListener('click', () => setTrendMode('val'));
+  document.addEventListener('click', () => { document.querySelectorAll('.ms-panel').forEach((p) => p.classList.add('hidden')); });
   // Trigger update when user presses Enter in search or date inputs
   ['dashQuery', 'dashStartDate', 'dashEndDate'].forEach((id) => {
     if ($(id)) {
@@ -633,7 +636,7 @@ function bindDashboard() {
   }
   if ($('btnExportDashboardExcel')) {
     $('btnExportDashboardExcel').addEventListener('click', () => {
-      const bu = val('dashBu') || 'ทั้งหมด';
+      const bu = (state.dashFilters.bu && state.dashFilters.bu.length) ? state.dashFilters.bu.join('-') : 'all';
       const period = val('dashPeriod') || '30';
       exportToExcel(state.dashboardRecords, `Damage_Dashboard_Data_${bu}_${period}d`);
     });
@@ -1127,25 +1130,70 @@ async function refreshDashboard() {
   try {
     const payload = {
       period: val('dashPeriod') || '30',
-      bu: val('dashBu') || 'ทั้งหมด',
-      damageType: val('dashDamageType') || 'ทั้งหมด',
-      shift: val('dashShift') || 'ทั้งหมด',
-      damageGroup: val('dashDamageGroup') || 'ทั้งหมด',
+      bu: 'ทั้งหมด', damageType: 'ทั้งหมด', shift: 'ทั้งหมด', damageGroup: 'ทั้งหมด',
       startDate: val('dashStartDate'),
       endDate: val('dashEndDate'),
       query: val('dashQuery')
     };
     const res = await apiGet('getDashboardRecords', payload);
     const data = unwrapApi(res);
-    state.dashboardRecords = data.records || [];
+    const rows = data.records || [];
     // Merge inconsistent group spellings (e.g. "OPT" vs "Opt.") so counts/filters align
-    state.dashboardRecords.forEach((r) => { r.damageGroup = canonGroup(r.damageGroup); });
-    renderDashboard(state.dashboardRecords);
+    rows.forEach((r) => { r.damageGroup = canonGroup(r.damageGroup); });
+    state.dashboardRaw = rows;
+    applyDashboardFilters();
   } catch (err) {
     toast('โหลด Dashboard ไม่สำเร็จ: ' + err.message, 'bad');
   } finally {
     loading(false);
   }
+}
+
+function buildMultiSelect(containerId, key, items) {
+  const box = $(containerId);
+  if (!box) return;
+  box.classList.add('ms');
+  const escq = (v) => String(v).replace(/"/g, '&quot;');
+  box.innerHTML =
+    '<button type="button" class="ms-btn"><span class="ms-text">ทั้งหมด</span><span class="ms-caret">▾</span></button>' +
+    '<div class="ms-panel hidden"><div class="ms-actions"><span class="ms-hint">เลือกได้หลายรายการ</span>' +
+    '<button type="button" class="ms-clear">ล้าง</button></div>' +
+    (items || []).map((v) => '<label class="ms-opt"><input type="checkbox" value="' + escq(v) + '"><span>' + esc(v) + '</span></label>').join('') +
+    '</div>';
+  const btn = box.querySelector('.ms-btn');
+  const panel = box.querySelector('.ms-panel');
+  const text = box.querySelector('.ms-text');
+  const sync = () => {
+    const sel = [...box.querySelectorAll('.ms-opt input:checked')].map((c) => c.value);
+    state.dashFilters[key] = sel;
+    text.textContent = sel.length === 0 ? 'ทั้งหมด' : (sel.length <= 2 ? sel.join(', ') : (sel.length + ' รายการ'));
+    box.classList.toggle('ms-on', sel.length > 0);
+    applyDashboardFilters();
+  };
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.querySelectorAll('.ms-panel').forEach((p) => { if (p !== panel) p.classList.add('hidden'); });
+    panel.classList.toggle('hidden');
+  });
+  panel.addEventListener('click', (e) => e.stopPropagation());
+  box.querySelector('.ms-clear').addEventListener('click', () => {
+    box.querySelectorAll('.ms-opt input').forEach((c) => { c.checked = false; });
+    sync();
+  });
+  box.querySelectorAll('.ms-opt input').forEach((c) => c.addEventListener('change', sync));
+}
+
+function applyDashboardFilters() {
+  const f = state.dashFilters || {};
+  const inSel = (arr, v) => !arr || arr.length === 0 || arr.indexOf(v) !== -1;
+  const rows = (state.dashboardRaw || []).filter((r) =>
+    inSel(f.bu, r.bu) &&
+    inSel(f.damageType, r.damageType) &&
+    inSel(f.shift, r.shift) &&
+    inSel(f.damageGroup, canonGroup(r.damageGroup))
+  );
+  state.dashboardRecords = rows;
+  renderDashboard(rows);
 }
 
 function renderDashboard(records) {
@@ -1248,6 +1296,7 @@ const MONTH_TH = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','
 
 function renderCharts(records) {
   if (typeof Chart === 'undefined') return;
+  if (window.ChartDataLabels) { try { Chart.unregister(window.ChartDataLabels); } catch (e) {} } // keep other charts label-free; trend chart opts in locally
 
   const now = new Date();
   const curMonth = now.getMonth() + 1;
@@ -1459,25 +1508,39 @@ function renderMonthlyTrend(records) {
   const useSeries = hasOther ? TREND_TYPES.concat(['อื่นๆ']) : TREND_TYPES;
   const round2 = (v) => Math.round(v * 100) / 100;
 
+  const totals = keys.map((k) => useSeries.reduce((s, n) => s + (buckets.get(k)[n] || 0), 0));
+  const trend = linReg(totals);
+  const maxV = Math.max(1, ...totals, ...trend) * 1.18;
+  const isValMode = mode === 'val';
+  const lbl = (v) => (!v ? '' : (isValMode
+    ? (v >= 1000 ? (v / 1000).toLocaleString('th-TH', { maximumFractionDigits: v >= 10000 ? 0 : 1 }) + 'K' : Math.round(v).toLocaleString('th-TH'))
+    : v.toLocaleString('th-TH')));
+
   const datasets = useSeries.map((name) => ({
     label: name,
     data: keys.map((k) => round2(buckets.get(k)[name] || 0)),
     backgroundColor: TREND_TYPE_COLORS[name] || '#94a3b8',
-    stack: 'stk', borderWidth: 0, borderRadius: 3, order: 3, yAxisID: 'y'
+    stack: 'stk', borderWidth: 0, borderRadius: 3, order: 3, yAxisID: 'y',
+    datalabels: {
+      display: (c) => (c.dataset.data[c.dataIndex] || 0) >= maxV * 0.07,
+      color: '#ffffff', font: { weight: 'bold', size: 10 }, anchor: 'center', align: 'center',
+      formatter: lbl
+    }
   }));
-  const totals = keys.map((k) => useSeries.reduce((s, n) => s + (buckets.get(k)[n] || 0), 0));
-  const trend = linReg(totals);
-  const maxV = Math.max(1, ...totals, ...trend) * 1.15;
-
   datasets.push({
     label: 'ยอดรวม', type: 'line', data: totals.map(round2),
     borderColor: '#111827', backgroundColor: '#111827', borderWidth: 2.4,
-    pointRadius: 3, pointBackgroundColor: '#111827', tension: 0.3, order: 1, yAxisID: 'y1'
+    pointRadius: 3, pointBackgroundColor: '#111827', tension: 0.3, order: 1, yAxisID: 'y1',
+    datalabels: {
+      display: true, anchor: 'end', align: 'top', offset: 6, clamp: true,
+      color: '#0f172a', font: { weight: 'bold', size: 11 }, formatter: lbl
+    }
   });
   datasets.push({
     label: 'เส้นแนวโน้ม', type: 'line', data: trend.map(round2),
     borderColor: '#8b5cf6', borderDash: [6, 5], borderWidth: 2,
-    pointRadius: 0, tension: 0, order: 2, yAxisID: 'y1', fill: false
+    pointRadius: 0, tension: 0, order: 2, yAxisID: 'y1', fill: false,
+    datalabels: { display: false }
   });
 
   const isVal = mode === 'val';
@@ -1493,8 +1556,11 @@ function renderMonthlyTrend(records) {
   // Defensive: drop any chart still bound to this canvas (e.g. after a prior failed render)
   const existingTrend = (typeof Chart.getChart === 'function') ? Chart.getChart(ctx) : null;
   if (existingTrend) existingTrend.destroy();
+  const DL = window.ChartDataLabels || null;
+  if (DL) { try { Chart.unregister(DL); } catch (e) {} } // scope data labels to this chart only
   state.chartMonthlyTrend = new Chart(ctx, {
     type: 'bar',
+    plugins: DL ? [DL] : [],
     data: { labels, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
