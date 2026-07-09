@@ -1490,7 +1490,11 @@ function renderMonthlyTrend(records) {
     : Number(v).toLocaleString('th-TH');
 
   if (state.chartMonthlyTrend) { state.chartMonthlyTrend.destroy(); state.chartMonthlyTrend = null; }
+  // Defensive: drop any chart still bound to this canvas (e.g. after a prior failed render)
+  const existingTrend = (typeof Chart.getChart === 'function') ? Chart.getChart(ctx) : null;
+  if (existingTrend) existingTrend.destroy();
   state.chartMonthlyTrend = new Chart(ctx, {
+    type: 'bar',
     data: { labels, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
