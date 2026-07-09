@@ -1174,10 +1174,9 @@ function buildMultiSelect(containerId, key, items) {
     gap: '8px', width: '100%', padding: '9px 12px', border: '1px solid #d7dee8', borderRadius: '10px',
     background: '#fff', font: 'inherit', fontSize: '14px', color: '#1e293b', cursor: 'pointer' });
   Object.assign(text.style, { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
-  Object.assign(panel.style, { position: 'absolute', top: 'calc(100% + 4px)', left: '0', minWidth: '100%',
-    width: 'max-content', maxWidth: '260px', maxHeight: '260px', overflowY: 'auto', background: '#fff',
-    border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 12px 30px rgba(15,23,42,.16)',
-    padding: '6px', zIndex: '9999', display: 'none' });
+  Object.assign(panel.style, { position: 'fixed', maxWidth: '280px', maxHeight: '300px', overflowY: 'auto',
+    background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px',
+    boxShadow: '0 12px 30px rgba(15,23,42,.18)', padding: '6px', zIndex: '99999', display: 'none' });
   const actions = panel.querySelector('.ms-actions');
   if (actions) Object.assign(actions.style, { display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     gap: '10px', padding: '2px 6px 6px', borderBottom: '1px solid #f1f5f9', marginBottom: '4px' });
@@ -1196,8 +1195,23 @@ function buildMultiSelect(containerId, key, items) {
     inp.style.accentColor = '#6366f1';
     inp.style.cursor = 'pointer';
   });
-  const open = () => { document.querySelectorAll('.ms-panel').forEach((p) => { p.style.display = 'none'; }); panel.style.display = 'block'; };
+  // Portal the panel to <body> and position:fixed so it floats above everything
+  // (escapes ancestor overflow:hidden and any stacking context on the dashboard).
+  const place = () => {
+    const r = btn.getBoundingClientRect();
+    panel.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 292)) + 'px';
+    panel.style.top = (r.bottom + 4) + 'px';
+    panel.style.minWidth = r.width + 'px';
+  };
   const close = () => { panel.style.display = 'none'; };
+  const open = () => {
+    document.querySelectorAll('.ms-panel').forEach((p) => { p.style.display = 'none'; });
+    if (panel.parentElement !== document.body) document.body.appendChild(panel);
+    place();
+    panel.style.display = 'block';
+  };
+  window.addEventListener('scroll', () => { if (panel.style.display === 'block') place(); }, true);
+  window.addEventListener('resize', () => { if (panel.style.display === 'block') place(); });
   const sync = () => {
     const sel = [...panel.querySelectorAll('.ms-opt input:checked')].map((c) => c.value);
     state.dashFilters[key] = sel;
